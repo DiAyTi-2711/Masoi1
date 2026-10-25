@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import re
 import secrets
 import time
 from collections import Counter
@@ -99,6 +100,34 @@ CALLS = {
 }
 
 
+# Lời quản trò mặc định. Chủ phòng sửa được từng câu; {…} là chỗ máy điền tên, số…
+SCRIPT_DEFAULTS: dict[str, str] = {
+    "nightfall": "Đêm thứ {dem}. Màn đêm buông xuống, tất cả mọi người hãy nhắm mắt lại.",
+    **{f"call_{role.value}": text for _, (role, text) in CALLS.items()},
+    "sleep": "{vai} hãy nhắm mắt lại và đi ngủ.",
+    "dawn_deaths": "Trời đã sáng, mọi người hãy mở mắt. Đêm qua, {nguoi_chet} đã chết.",
+    "dawn_peace": "Trời đã sáng, mọi người hãy mở mắt. Đêm qua là một đêm bình yên, không ai chết.",
+    "reveal": "{ten} là {vai}.",
+    "silenced": "{ten} đã bị phù phép, hôm nay không được nói.",
+    "hunter_call": "{ten} là Thợ Săn. Thợ Săn hãy chọn một người để kéo theo.",
+    "hunter_shot": "Thợ Săn đã bắn {ten}.",
+    "hunter_skip": "Thợ Săn đã hạ súng, không bắn ai.",
+    "discuss": "Bây giờ là thời gian thảo luận. Mọi người có {thoi_gian}. Ai muốn bỏ phiếu ngay thì bấm nút Vote ngay.",
+    "ready": "Đa số đã sẵn sàng.",
+    "host_skip": "Quản trò cho bỏ phiếu ngay.",
+    "vote": "Bắt đầu bỏ phiếu. Mọi người hãy chọn người muốn treo cổ trên điện thoại.",
+    "lynch": "Với {so_phieu} phiếu, {ten} đã bị treo cổ.",
+    "no_lynch": "Số phiếu không đủ. Hôm nay không ai bị treo cổ.",
+    "end": "Ván chơi kết thúc. {phe_thang} chiến thắng! Sau đây là diễn biến của ván chơi.",
+    "thanks": "Cảm ơn mọi người đã chơi.",
+}
+SCRIPT_MAX = 300
+BOT_NAMES = ["Na", "Bi", "Tôm", "Mít", "Su", "Bống", "Cốm", "Kem", "Xoài", "Đậu", "Gạo", "Mận", "Bơ", "Nho",
+             "Sóc", "Thỏ", "Cam", "Táo", "Lê", "Ổi", "Dừa", "Chanh", "Bưởi", "Sung", "Mơ", "Hồng", "Nấm", "Tiêu",
+             "Gừng", "Quế"]
+_PLACEHOLDER = re.compile(r"\{(\w+)\}")
+
+
 def suggest_roles(n: int) -> dict[str, int]:
     """Chia vai mặc định: ~1/4 là sói; càng đông càng thêm vai đặc biệt."""
     r = {role: 0 for role in Role}
@@ -133,6 +162,7 @@ class Player:
     token: str
     is_host: bool = False
     narrator: bool = False     # máy quản trò: không nhận vai, không chơi
+    bot: bool = False          # máy chơi do server điều khiển
     role: Optional[Role] = None
     alive: bool = True
     connected: bool = False
@@ -149,6 +179,9 @@ class Settings:
     discuss_seconds: int = 180
     vote_seconds: int = 60
     reveal_role_on_death: bool = True
+    fast_turns: bool = True
+    host_voice: bool = False     # chủ phòng (đang chơi) cũng đọc lời quản trò trên máy mình
+    scripts: dict[str, str] = field(default_factory=dict)  # lời quản trò đã sửa      # chọn xong là kết thúc lượt, không chờ hết giờ
 
 
 class GameError(Exception):
@@ -169,6 +202,7 @@ class Room:
         # Thời gian để quản trò đọc câu gọi trước khi đếm giờ của vai (test có thể chỉnh nhỏ)
         self.call_seconds = 5.0
         self.announce_seconds = 6.0
+        self.jitter = (1.0, 3.0)  # giây ngẫu nhiên thêm vào mỗi lượt để khó đoán
         self._speech_id = 0
         self.task: asyncio.Task | None = None
         self._reset_game()
@@ -198,6 +232,10 @@ class Room:
         self.cub_bonus = False      # Sói Con vừa chết
         self.frozen_next: str | None = None
         self.silenced: str | None = None
+        self.ready_vote: set[str] = set()
+        self._step_id = 0
+        self.bot_mem: dict[str, dict] = {}      # trí nhớ riêng của từng máy chơi
+        self.public_claims: dict[str, bool] = {}  # Tiên Tri máy đã công khai: id -> là sói?
         self._reset_night()
 
     def _reset_night(self) -> None:
@@ -241,9 +279,42 @@ class Room:
         if self.phase != Phase.LOBBY:
             raise GameError("Không thể rời khi ván đang diễn ra")
         p = self.players.pop(pid, None)
-        if p and p.is_host and self.players:
-            next(iter(self.players.values())).is_host = True
+        if p and p.is_host:
+            heir = next((x for x in self.players.values() if not x.bot), None)
+            if heir:
+                heir.is_host = True
         self._auto_roles()
+
+    # ------------------------------------------------------------ máy chơi
+    def humans(self) -> list[Player]:
+        return [p for p in self.seated() if not p.bot]
+
+    def add_bot(self) -> Player:
+        if self.phase != Phase.LOBBY:
+            raise GameError("Chỉ thêm máy chơi được ở phòng chờ")
+        if len(self.seated()) >= MAX_PLAYERS:
+            raise GameError(f"Phòng đã đủ {MAX_PLAYERS} người")
+        used = {p.name for p in self.players.values()}
+        name = next((f"🤖 {n}" for n in BOT_NAMES if f"🤖 {n}" not in used),
+                    f"🤖 Máy {len(self.players) + 1}")
+        p = Player(id=secrets.token_hex(4), name=name, token=secrets.token_urlsafe(16),
+                   bot=True, connected=True)
+        self.players[p.id] = p
+        self._auto_roles()
+        return p
+
+    def remove_bot(self) -> None:
+        bots = [p for p in self.seated() if p.bot]
+        if not bots:
+            raise GameError("Không còn máy chơi nào")
+        self.remove_player(bots[-1].id)
+
+    def fill_bots(self, total: int) -> None:
+        total = max(0, min(MAX_PLAYERS, int(total)))
+        while len(self.seated()) < total:
+            self.add_bot()
+        while len(self.seated()) > total and any(p.bot for p in self.seated()):
+            self.remove_bot()
 
     def _auto_roles(self) -> None:
         """Tự động: chia theo số người. Tuỳ chỉnh: giữ vai Host chọn, Dân Làng tự lấp chỗ trống."""
@@ -253,7 +324,24 @@ class Room:
         else:
             _fill_villagers(self.settings.roles, n)
 
+    def update_scripts(self, data) -> None:
+        """Sửa lời quản trò – được phép cả khi đang chơi. Câu để trống = dùng lại mặc định."""
+        if not isinstance(data, dict):
+            raise GameError("Lời quản trò không hợp lệ")
+        for key, text in data.items():
+            if key not in SCRIPT_DEFAULTS:
+                continue
+            text = " ".join(str(text or "").split())[:SCRIPT_MAX]
+            if text and text != SCRIPT_DEFAULTS[key]:
+                self.settings.scripts[key] = text
+            else:
+                self.settings.scripts.pop(key, None)
+
     def update_settings(self, data: dict) -> None:
+        if "scripts" in data:
+            self.update_scripts(data["scripts"])
+            if len(data) == 1:
+                return
         if self.phase != Phase.LOBBY:
             raise GameError("Chỉ đổi cấu hình được ở phòng chờ")
         try:
@@ -273,8 +361,9 @@ class Room:
             for key, (lo, hi) in limits.items():
                 if key in data:
                     setattr(self.settings, key, max(lo, min(hi, int(data[key]))))
-            if "reveal_role_on_death" in data:
-                self.settings.reveal_role_on_death = bool(data["reveal_role_on_death"])
+            for key in ("reveal_role_on_death", "fast_turns", "host_voice"):
+                if key in data:
+                    setattr(self.settings, key, bool(data[key]))
         except (TypeError, ValueError):
             raise GameError("Cấu hình không hợp lệ")
 
@@ -312,8 +401,8 @@ class Room:
             deal = [Role.CREATOR] + deal
         for p, role in zip(players, deal):
             p.role, p.alive, p.private_log = role, True, []
-        self._hist("Bài đã chia: " + ", ".join(f"{p.name} – {ROLE_VI[p.role]}" for p in players)
-                   + (f". Hai lá dư: {ROLE_VI[extra[0]]}, {ROLE_VI[extra[1]]}" if extra else ""))
+        self._hist("Bài đã chia: " + ", ".join(f"{p.name} là {ROLE_VI[p.role]}" for p in players)
+                   + (f". Hai lá dư là {ROLE_VI[extra[0]]} và {ROLE_VI[extra[1]]}" if extra else "") + ".")
         self.task = asyncio.create_task(self._run())
 
     def reset_to_lobby(self) -> None:
@@ -356,6 +445,11 @@ class Room:
 
     def _event(self, text: str) -> None:
         self.log.append({"t": time.time(), "text": text})
+
+    def _t(self, key: str, **values) -> str:
+        """Lấy câu thoại (bản đã sửa hoặc mặc định) và điền tên, số vào chỗ {…}."""
+        text = self.settings.scripts.get(key) or SCRIPT_DEFAULTS[key]
+        return _PLACEHOLDER.sub(lambda m: str(values.get(m.group(1), m.group(0))), text)
 
     def _say(self, text: str) -> None:
         """Câu để máy quản trò đọc to."""
@@ -456,29 +550,50 @@ class Room:
                 self._note(p.id, f"🐺 Đồng đội sói: {self._pack_names(p.id)}")
 
     async def _step(self, phase: Phase, seconds: float, actors: set[str],
-                    early: bool = False) -> None:
-        """Mở một bước. early=False: luôn chờ đủ giờ để không lộ ai đã hành động/đã chết."""
+                    early: bool = False, wait: float | None = None,
+                    min_seconds: float = 0) -> None:
+        """Mở một bước.
+
+        seconds: thời gian hiển thị trên đồng hồ. early: kết thúc khi mọi người làm xong.
+        wait: thời gian chờ thật (để lượt của vai đã chết trông giống lượt bình thường).
+        min_seconds: chờ ít nhất chừng này (để quản trò kịp đọc xong câu gọi).
+        """
         self.phase = phase
         self.actors = set(actors)
         self._step_done = asyncio.Event()
-        self.deadline = time.time() + seconds
+        self._step_id += 1
+        start = time.time()
+        self.deadline = start + seconds
         await self._broadcast(self)
+        self._wake_bots(seconds)
         try:
             if early:
                 await asyncio.wait_for(self._step_done.wait(), timeout=seconds)
             else:
-                await asyncio.sleep(seconds)
+                await asyncio.sleep(seconds if wait is None else wait)
         except asyncio.TimeoutError:
             pass
+        rest = start + min_seconds - time.time()
+        if rest > 0:
+            await asyncio.sleep(rest)
         self.actors = set()
 
-    async def _call(self, phase: Phase, seconds: float, actors: set[str],
-                    early: bool = False) -> None:
+    async def _call(self, phase: Phase, seconds: float, actors: set[str]) -> None:
         """Quản trò gọi một vai dậy, chờ, rồi cho vai đó đi ngủ."""
-        role, text = CALLS[phase]
-        self._say(text)
-        await self._step(phase, self.call_seconds + seconds, actors, early)
-        self._say(f"{ROLE_VI[role]} hãy nhắm mắt lại và đi ngủ.")
+        role, _ = CALLS[phase]
+        self._say(self._t(f"call_{role.value}"))
+        lead, full = self.call_seconds, self.call_seconds + seconds
+        if not self.settings.fast_turns:
+            await self._step(phase, full, actors)  # luôn chờ đủ giờ
+        elif actors:
+            # chọn xong là đi tiếp, cộng một chút ngẫu nhiên cho khó đoán
+            await self._step(phase, full, actors, early=True,
+                             min_seconds=lead + random.uniform(*self.jitter))
+        else:
+            # vai đã chết / lá dư: vẫn gọi, chờ một khoảng như người thật đang chọn
+            await self._step(phase, full, set(),
+                             wait=lead + random.uniform(min(self.jitter[1], seconds), seconds))
+        self._say(self._t("sleep", vai=ROLE_VI[role]))
 
     def _finish_step(self) -> None:
         self.actors = set()
@@ -509,7 +624,7 @@ class Room:
             self._hist(f"{self._name(self.frozen)} bị phong ấn suốt đêm nay.")
 
         self._event(f"🌙 Đêm {self.day_no}")
-        self._say(f"Đêm thứ {self.day_no}. Màn đêm buông xuống, tất cả mọi người hãy nhắm mắt lại.")
+        self._say(self._t("nightfall", dem=self.day_no))
         await self._announce(Phase.NIGHTFALL)
 
         st = self.settings
@@ -599,14 +714,15 @@ class Room:
         if order:
             names = self._names(order)
             self._event(f"☀️ Trời sáng. Đêm qua {names} đã chết.")
-            roles = " ".join(f"{self._name(d)} là {ROLE_VI[self.players[d].role]}." for d in order) if reveal else ""
-            self._say(f"Trời đã sáng, mọi người hãy mở mắt. Đêm qua, {names} đã chết. {roles}")
+            roles = " ".join(self._t("reveal", ten=self._name(d), vai=ROLE_VI[self.players[d].role])
+                             for d in order) if reveal else ""
+            self._say(f"{self._t('dawn_deaths', nguoi_chet=names)} {roles}".strip())
             for d in order:
                 self._hist(f"{self._name(d)} ({ROLE_VI[self.players[d].role]}) chết vì "
                            + ("bị sói cắn." if deaths[d] == "wolf" else "bình độc của Phù Thủy."))
         else:
             self._event("☀️ Trời sáng. Đêm qua bình yên, không ai chết.")
-            self._say("Trời đã sáng, mọi người hãy mở mắt. Đêm qua là một đêm bình yên, không ai chết.")
+            self._say(self._t("dawn_peace"))
         killed = []
         for pid in order:
             role_before = self.players[pid].role
@@ -617,7 +733,7 @@ class Room:
         if self.spell_target and self.players[self.spell_target].alive:
             self.silenced = self.spell_target
             self._event(f"🤐 {self._name(self.silenced)} bị phù phép – không được nói trong buổi thảo luận hôm nay.")
-            self._say(f"{self._name(self.silenced)} đã bị phù phép, hôm nay không được nói.")
+            self._say(self._t("silenced", ten=self._name(self.silenced)))
         await self._announce(Phase.DAWN)
 
         for pid, _ in killed:  # Thợ Săn chết trong đêm được bắn
@@ -639,10 +755,17 @@ class Room:
     async def _day(self) -> bool:
         mins = self.settings.discuss_seconds
         length = f"{mins // 60} phút" + (f" {mins % 60} giây" if mins % 60 else "") if mins >= 60 else f"{mins} giây"
-        self._say(f"Bây giờ là thời gian thảo luận. Mọi người có {length}.")
+        self._say(self._t("discuss", thoi_gian=length))
+        self.ready_vote = set()
+        if not any(not p.bot for p in self.alive()):
+            mins = min(mins, 12)  # chỉ còn máy chơi: thảo luận ngắn
+        for b in self.alive():
+            if b.bot and random.random() < .6:
+                lo = min(4, mins * .15)
+                asyncio.create_task(self._bot_chat(b.id, self._step_id + 1, random.uniform(lo, max(lo + .1, mins * .5))))
         await self._step(Phase.DAY_DISCUSS, mins, set(), early=True)
         self.day_votes = {}
-        self._say("Hết giờ thảo luận. Mọi người hãy bỏ phiếu treo cổ trên điện thoại.")
+        self._say(self._t("vote"))
         await self._step(Phase.DAY_VOTE, self.settings.vote_seconds,
                          {p.id for p in self.alive()}, early=True)
         target = self._vote_result()
@@ -650,13 +773,14 @@ class Room:
             n = sum(1 for t in self.day_votes.values() if t == target)
             role = ROLE_VI[self.players[target].role]
             self._event(f"⚖️ Dân làng đã treo cổ {self._name(target)}.")
-            self._say(f"Với {n} phiếu, {self._name(target)} đã bị treo cổ."
-                      + (f" {self._name(target)} là {role}." if self.settings.reveal_role_on_death else ""))
+            self._say(self._t("lynch", so_phieu=n, ten=self._name(target))
+                      + (" " + self._t("reveal", ten=self._name(target), vai=role)
+                         if self.settings.reveal_role_on_death else ""))
             self._hist(f"Dân làng treo cổ {self._name(target)} ({role}) với {n} phiếu.")
             self._kill(target, "lynch")
         else:
             self._event("⚖️ Phiếu không đủ – hôm nay không ai bị treo cổ.")
-            self._say("Số phiếu không đủ. Hôm nay không ai bị treo cổ.")
+            self._say(self._t("no_lynch"))
             self._hist("Không ai bị treo cổ.")
         self.silenced = None
         await self._announce(Phase.VERDICT)
@@ -679,19 +803,20 @@ class Room:
     async def _hunter(self, pid: str) -> None:
         self.hunter_shooter, self.hunter_target = pid, None
         self._event(f"🏹 {self._name(pid)} là Thợ Săn và được kéo một người chết theo!")
-        self._say(f"{self._name(pid)} là Thợ Săn. Thợ Săn hãy chọn một người để kéo theo.")
+        self._say(self._t("hunter_call", ten=self._name(pid)))
         await self._step(Phase.HUNTER_SHOT, self.settings.hunter_seconds, {pid}, early=True)
         t = self.hunter_target
         if t and self.players[t].alive:
             role = ROLE_VI[self.players[t].role]
             self._event(f"💥 Thợ Săn đã bắn {self._name(t)}.")
-            self._say(f"Thợ Săn đã bắn {self._name(t)}."
-                      + (f" {self._name(t)} là {role}." if self.settings.reveal_role_on_death else ""))
+            self._say(self._t("hunter_shot", ten=self._name(t))
+                      + (" " + self._t("reveal", ten=self._name(t), vai=role)
+                         if self.settings.reveal_role_on_death else ""))
             self._hist(f"Thợ Săn {self._name(pid)} bắn chết {self._name(t)} ({role}).")
             self._kill(t, "hunter")
         else:
             self._event("Thợ Săn đã hạ súng, không bắn ai.")
-            self._say("Thợ Săn đã hạ súng, không bắn ai.")
+            self._say(self._t("hunter_skip"))
             self._hist(f"Thợ Săn {self._name(pid)} không bắn ai.")
         self.hunter_shooter = None
         await self._announce(Phase.VERDICT)
@@ -700,14 +825,14 @@ class Room:
         self.phase, self.deadline, self.actors = Phase.ENDED, None, set()
         won = "Phe Dân Làng" if self.winner == "village" else "Phe Ma Sói"
         self._event(("🏆 " if self.winner == "village" else "🐺 ") + f"{won} chiến thắng!")
-        self._say(f"Ván chơi kết thúc. {won} chiến thắng! Sau đây là diễn biến của ván chơi.")
+        self._say(self._t("end", phe_thang=won))
         period = None
         for h in self.history:
             if h["period"] != period:
                 period = h["period"]
                 self._say(period + ".")
             self._say(h["text"])
-        self._say("Cảm ơn mọi người đã chơi.")
+        self._say(self._t("thanks"))
         await self._broadcast(self)
 
     # ------------------------------------------------------------ hành động
@@ -720,7 +845,19 @@ class Room:
         if action == "skip_discussion":
             if not p.is_host or ph != Phase.DAY_DISCUSS:
                 raise GameError("Chỉ chủ phòng mới bỏ qua được thảo luận")
+            self._say(self._t("host_skip"))
             self._finish_step()
+            return
+        if action == "ready_vote":
+            if ph != Phase.DAY_DISCUSS or p.narrator or not p.alive:
+                raise GameError("Chỉ người còn sống mới bấm được lúc thảo luận")
+            self.ready_vote ^= {pid}  # bấm lần nữa để huỷ
+            voters = [x for x in self.alive() if not x.bot]  # chỉ người thật quyết định
+            if len(self.ready_vote) * 2 > len(voters):
+                self._event(f"🗳️ Đa số ({len(self.ready_vote)}/{len(voters)}) muốn bỏ phiếu ngay.")
+                self._say(self._t("ready"))
+                self._finish_step()
+            await self._broadcast(self)
             return
         if pid not in self.actors:
             raise GameError("Hết lượt của bạn rồi" if ph.value.startswith("night") else "Chưa đến lượt của bạn")
@@ -765,7 +902,14 @@ class Room:
                 self._need_alive(t)
                 if self.is_wolf(self.players[t]):
                     raise GameError("Không thể cắn đồng đội")
-            self.wolf_votes[pid] = sorted(picks)  # đổi được đến khi hết giờ
+            self.wolf_votes[pid] = sorted(picks)  # đổi được đến khi cả bầy thống nhất
+            if not p.bot:  # máy sói đi theo lựa chọn của sói người
+                for w in self.wolves():
+                    if w.bot and self.wolf_votes.get(w.id) != sorted(picks):
+                        asyncio.create_task(self._bot_turn(w.id, self._step_id, random.uniform(.8, 2)))
+            pack = {w.id for w in self.wolves()}
+            if pack <= self.wolf_votes.keys() and len({tuple(v) for v in self.wolf_votes.values()}) == 1:
+                self._finish_step()
 
         elif ph == Phase.NIGHT_WITCH and action == "witch_heal":
             if not self.witch_heal_left or target not in self.wolf_targets:
@@ -858,6 +1002,132 @@ class Room:
             raise GameError("Hành động không hợp lệ lúc này")
         await self._broadcast(self)
 
+    # ------------------------------------------------------------ máy chơi: suy nghĩ
+    def _mem(self, pid: str) -> dict:
+        return self.bot_mem.setdefault(pid, {"checked": {}})
+
+    def _wake_bots(self, seconds: float) -> None:
+        """Mỗi khi mở một bước, máy chơi có lượt sẽ 'suy nghĩ' một lúc rồi hành động."""
+        bots = [pid for pid in self.actors if self.players[pid].bot]
+        if not bots:
+            return
+        lead = self.call_seconds if self.phase.value.startswith("night") else 0
+        room = max(1.0, (seconds - lead) * .6)
+        for pid in bots:
+            delay = lead + random.uniform(min(1.5, room), min(room, 7))
+            asyncio.create_task(self._bot_turn(pid, self._step_id, delay))
+
+    async def _bot_turn(self, pid: str, step_id: int, delay: float) -> None:
+        await asyncio.sleep(delay)
+        for _ in range(4):  # vài thao tác liên tiếp: soi rồi bấm "đã ghi nhớ", cứu rồi "xong"…
+            if self._step_id != step_id or pid not in self.actors:
+                return
+            p = self.players[pid]
+            a = self._action_for(p)
+            if not a:
+                return
+            act, target = self._bot_choose(p, a)
+            try:
+                await self.handle_action(pid, act, target)
+            except GameError:
+                return
+            if act == "seer_check":
+                self._mem(pid)["checked"][target] = self.is_wolf(self.players[target])
+            if act in ("wolf_vote", "vote"):
+                return
+            await asyncio.sleep(random.uniform(.8, 1.6))
+
+    def _bot_choose(self, p: Player, a: dict):
+        kind, targets = a["kind"], a.get("targets") or []
+        mem = self._mem(p.id)
+        known = [t for t, w in mem["checked"].items() if w and self.players[t].alive]
+        if a.get("info") or a.get("result"):
+            return a["ack"], None
+        if kind == "creator":
+            return "creator_pick", random.choice(a["options"])
+        if kind == "moon":
+            if random.random() < .5:
+                return "moon_shield", random.choice(targets)
+            return "moon_check", random.choice([t for t in targets if t != p.id] or targets)
+        if kind == "witch":
+            if a["heal_left"] and a["victims"] and not a["healed"] and random.random() < .5:
+                return "witch_heal", a["victims"][0]
+            if (a["poison_left"] and not a["poisoned"] and self.day_no >= 2 and targets
+                    and not mem.get("poison_tried") and random.random() < .3):
+                mem["poison_tried"] = True
+                pool = [t for t in targets if t in known] or targets
+                return "witch_poison", random.choice(pool)
+            return "witch_done", None
+        if kind == "wolf_vote":
+            team = a["team_votes"]
+            human = [v for w, v in team.items() if not self.players[w].bot]
+            pick = human[0] if human else (next(iter(team.values())) if team else
+                                           random.sample(targets, min(a["pick"], len(targets))))
+            return "wolf_vote", pick
+        if kind == "seer":
+            fresh = [t for t in targets if t not in mem["checked"]]
+            return "seer_check", random.choice(fresh or targets)
+        if kind == "vote":
+            return "vote", self._bot_vote(p, targets, known)
+        if kind == "hunter":
+            pool = [t for t in targets if t in known or self.public_claims.get(t)] or targets
+            return "hunter_shoot", random.choice(pool)
+        return a["act"], random.choice(targets)
+
+    def _bot_vote(self, p: Player, targets: list[str], known: list[str]):
+        tally = Counter(t for t in self.day_votes.values() if t != "skip")
+        leader = next((t for t, _ in tally.most_common() if t in targets), None)
+        if self.is_wolf(p):
+            prey = [t for t in targets if not self.is_wolf(self.players[t])]
+            if leader in prey and random.random() < .6:
+                return leader
+            claimed = [t for t in prey if self.public_claims.get(t) is False]
+            return random.choice([t for t in prey if t not in claimed] or prey or targets)
+        if known:
+            return random.choice(known)
+        claimed = [t for t in targets if self.public_claims.get(t)]
+        if claimed and random.random() < .7:
+            return claimed[0]
+        if leader and random.random() < .5:
+            return leader
+        return "skip" if random.random() < .1 else random.choice(targets)
+
+    async def _bot_chat(self, pid: str, step_id: int, delay: float) -> None:
+        """Máy chơi lên tiếng trong buổi thảo luận (quản trò đọc to)."""
+        await asyncio.sleep(delay)
+        p = self.players[pid]
+        if self._step_id != step_id or self.phase != Phase.DAY_DISCUSS or not p.alive:
+            return
+        others = [x for x in self.alive() if x.id != pid]
+        if not others:
+            return
+        mem = self._mem(pid)
+        wolves = [t for t, w in mem["checked"].items() if w and self.players[t].alive]
+        clears = [t for t, w in mem["checked"].items() if not w and self.players[t].alive]
+        claimed = [t for t, w in self.public_claims.items() if w and self.players[t].alive and t != pid]
+        if p.role == Role.SEER and wolves:
+            t = wolves[0]
+            self.public_claims[t] = True
+            line = f"Tôi là Tiên Tri. Tôi đã soi {self._name(t)}, đó là Sói! Treo cổ {self._name(t)} đi."
+        elif p.role == Role.SEER and clears and random.random() < .5:
+            t = clears[0]
+            self.public_claims.setdefault(t, False)
+            line = f"Tôi là Tiên Tri. {self._name(t)} là người tốt, đừng treo nhầm."
+        elif self.is_wolf(p):
+            prey = [x for x in others if not self.is_wolf(x)]
+            t = random.choice(prey or others)
+            line = random.choice([f"Tôi thấy {t.name} rất đáng ngờ.", f"{t.name} im lặng quá, tôi nghi lắm.",
+                                  f"Hôm nay tôi sẽ bỏ phiếu cho {t.name}."])
+        elif claimed:
+            line = f"Tôi tin Tiên Tri, treo {self._name(claimed[0])} đi."
+        else:
+            t = random.choice(others)
+            line = random.choice([f"Tôi chưa chắc lắm, nhưng {t.name} hơi lạ.", "Tôi chưa có manh mối, mọi người nói trước đi.",
+                                  f"Tôi nghi {t.name}."])
+        self._event(f"💬 {p.name}: {line}")
+        self._say(f"{p.name.replace('🤖', '').strip()} nói: {line}")
+        await self._broadcast(self)
+
     # ------------------------------------------------------------ góc nhìn riêng
     def view_for(self, pid: str) -> dict:
         me = self.players[pid]
@@ -885,7 +1155,7 @@ class Room:
                    "narrator": me.narrator, "role": me.role.value if me.role else None,
                    "wolf": self.is_wolf(me) if me.role else False},
             "narrator": {"name": narr.name, "connected": narr.connected} if narr else None,
-            "players": [{"id": o.id, "name": o.name, "alive": o.alive,
+            "players": [{"id": o.id, "name": o.name, "alive": o.alive, "bot": o.bot,
                          "connected": o.connected, "is_host": o.is_host,
                          "role": visible_role(o)} for o in self.seated()],
             "settings": asdict(self.settings),
@@ -897,7 +1167,11 @@ class Room:
             "votes": self.day_votes if self.phase in (Phase.DAY_VOTE, Phase.VERDICT) else {},
             "hunter": self.hunter_shooter,
             "silenced": self.silenced,
-            "speech": self.speech[-150:] if me.narrator else [],
+            "ready": {"count": len(self.ready_vote),
+                      "need": len([x for x in self.alive() if not x.bot]) // 2 + 1,
+                      "me": pid in self.ready_vote},
+            "speech": self.speech[-150:] if (me.narrator or (me.is_host and self.settings.host_voice)) else [],
+            "script_defaults": SCRIPT_DEFAULTS if me.is_host else None,
             "history": self.history if ended else [],
             "winner": self.winner,
         }

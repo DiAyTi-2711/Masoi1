@@ -46,7 +46,7 @@ async def play(n: int, roles=None) -> tuple[str, int, list]:
         for pid in list(room.actors):
             asyncio.create_task(bot(room, pid))
     room = Room("TEST", broadcast)
-    room.announce_seconds, room.call_seconds = 0.001, 0.001
+    room.announce_seconds, room.call_seconds, room.jitter = 0.001, 0.001, (0.001, 0.002)
     room.add_player("Quản trò", is_host=True, narrator=True)
     for i in range(n):
         room.add_player(f"P{i}")

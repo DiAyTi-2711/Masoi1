@@ -201,6 +201,16 @@ async def dispatch(room: Room, pid: str, ws: WebSocket, msg: dict) -> None:
         room.update_settings(msg.get("settings") or {})
     elif kind == "start":
         await room.start()
+    elif kind == "bots":
+        op = msg.get("op")
+        if op == "add":
+            room.add_bot()
+        elif op == "remove":
+            room.remove_bot()
+        elif op == "fill":
+            room.fill_bots(int(msg.get("n") or 0))
+        else:
+            raise GameError("Lệnh máy chơi không hợp lệ")
     elif kind == "restart":
         room.reset_to_lobby()
     elif kind == "kick":

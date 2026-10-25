@@ -40,6 +40,13 @@ Mạng LAN chạy `http://` (không có HTTPS) nên trình duyệt tắt vài t�
 
 Mã QR tự dùng địa chỉ https của Render, mọi người vào bằng 4G được.
 
+## Hai chế độ chơi
+
+- **🌐 Chơi online:** chỉ người thật, mọi người quét mã QR để vào phòng.
+- **🤖 Chơi với máy:** người thật chơi cùng "máy chơi" do server điều khiển (chủ phòng thêm/bớt máy hoặc bấm *Lấp đủ 8/10/12… người*). Máy tự chọn mục tiêu ban đêm (sói máy đi theo lựa chọn của sói người), lên tiếng lúc thảo luận (Tiên Tri máy công khai kết quả soi, sói máy đổ tội người khác…) và bỏ phiếu. Nút *Vote ngay* chỉ tính phiếu của người thật. Khi không có máy quản trò riêng, bật *Máy tôi đọc lời quản trò* để điện thoại chủ phòng đọc lời dẫn.
+
+Chuyển chế độ ngay ở phòng chờ trong mục *Chế độ chơi*.
+
 ## Máy quản trò (giọng đọc tiếng Việt)
 
 Ở trang chủ chọn **🎙️ Tạo phòng – máy này làm quản trò**. Máy đó không nhận vai, đặt giữa bàn và đọc to toàn bộ lời dẫn bằng giọng tiếng Việt của điện thoại (Web Speech API), đồng thời hiện phụ đề và đồng hồ lớn. Người chơi quét QR vào phòng như bình thường; máy quản trò cũng là chủ phòng (chọn vai, chỉnh thời gian, bắt đầu ván).

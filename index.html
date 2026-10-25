@@ -204,6 +204,19 @@ select{width:100%;min-height:50px;border-radius:12px;border:1px solid var(--line
 .recap p{font-size:15px;padding:4px 0;border-bottom:1px solid var(--line)}
 .unlock{position:fixed;inset:0;z-index:12;display:flex;flex-direction:column;gap:16px;align-items:center;justify-content:center;
   padding:24px;text-align:center;background:var(--sky)}
+.scripts{margin:18px 0;padding:4px 16px 16px;border-radius:18px;background:var(--card);border:1px solid var(--line)}
+.scripts summary{min-height:52px;display:flex;align-items:center;font-weight:600}
+.scripts h4{font:600 14px/1.3 var(--sans);color:var(--lantern);margin:18px 0 6px}
+.sline{padding:10px 0;border-bottom:1px solid var(--line)}
+.sline label{display:block;font-size:14px;color:var(--mist);margin-bottom:6px}
+.sline label b{color:var(--bone);font-weight:600}
+.sline textarea{width:100%;min-height:96px;padding:10px 12px;border-radius:12px;border:1px solid var(--line);
+  background:rgba(0,0,0,.25);color:var(--bone);font:inherit;font-size:16px;line-height:1.4;resize:vertical}
+.sline.custom textarea{border-color:var(--lantern)}
+.sline .tools{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;align-items:center}
+.sline .tools button{min-height:36px;padding:0 10px;border-radius:9px;background:var(--card-2);font-size:13px}
+.sline .tools .ph{background:rgba(232,168,74,.14);color:var(--lantern)}
+.sline .bad{color:#f0a3a8;font-size:13px;margin-top:4px}
 .toast{position:fixed;left:16px;right:16px;top:calc(12px + env(safe-area-inset-top,0));max-width:488px;margin:0 auto;
   padding:14px 16px;border-radius:14px;background:#3a1b1f;color:#f6d0d3;z-index:20;display:none}
 .toast.show{display:block}
@@ -263,9 +276,10 @@ const KIND = {
 const $ = s => document.querySelector(s);
 const app = $('#app');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const initials = n => n.trim().split(/\s+/).slice(-2).map(w => w[0]).join('').toUpperCase();
+const initials = n => n.startsWith('🤖') ? '🤖'
+  : n.trim().split(/\s+/).slice(-2).map(w => [...w][0] || '').join('').toUpperCase();
 
-let invite = null, qrFull = false;
+let invite = null, qrFull = false, pendingBots = false;
 let S = null, ws = null, clockOffset = 0, picks = [], stepKey = '', revealing = false, wakeLock = null;
 let session = load('masoi_session');
 
@@ -307,7 +321,19 @@ function connect(){
 }
 
 function onState(){
-  if (S.me.narrator) queueSpeech(S.speech);
+  if (S.me.narrator || (S.me.is_host && S.settings.host_voice)) queueSpeech(S.speech);
+  if (pendingBots && S.phase === 'lobby' && S.me.is_host){
+    pendingBots = false;
+    send({type:'bots', op:'fill', n:8});
+    send({type:'settings', settings:{host_voice:true}});
+  }
+  if (S.me.narrator && S.me.is_host && !scriptsSynced){
+    scriptsSynced = true;
+    const local = load('masoi_scripts');
+    if (local && Object.keys(local).length && !Object.keys(S.settings.scripts || {}).length)
+      send({type:'settings', settings:{scripts: local}});
+  }
+  if (document.activeElement?.dataset?.script){ pendingRender = true; return; }  // đang gõ: chưa vẽ lại
   const key = `${S.phase}-${S.day}`;
   if (key !== stepKey){ stepKey = key; picks = []; if (S.action) navigator.vibrate?.([120,60,120]); }
   if (S.phase !== 'lobby' || S.me.narrator) keepAwake();
@@ -319,6 +345,58 @@ async function keepAwake(){
   try { wakeLock = await navigator.wakeLock.request('screen'); wakeLock.onrelease = () => wakeLock = null; } catch {}
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden && S && S.phase !== 'lobby') keepAwake(); });
+
+/* ---------------- lời quản trò có thể chỉnh ---------------- */
+const SCRIPT_GROUPS = [
+  ['Màn đêm', [['nightfall', 'Bắt đầu mỗi đêm', ['dem']], ['sleep', 'Cho vai đi ngủ (dùng chung mọi vai)', ['vai']]]],
+  ['Gọi vai thức dậy', [['call_creator', 'Kẻ Sáng Tạo'], ['call_cloner', 'Kẻ Nhân Bản'], ['call_bodyguard', 'Bảo Vệ'],
+    ['call_werewolf', 'Ma Sói'], ['call_witch', 'Phù Thủy'], ['call_seer', 'Tiên Tri'], ['call_moon_maiden', 'Nguyệt Nữ'],
+    ['call_snow_wolf', 'Sói Băng'], ['call_spellcaster', 'Kẻ Phù Phép']]],
+  ['Trời sáng', [['dawn_deaths', 'Có người chết', ['nguoi_chet']], ['dawn_peace', 'Không ai chết'],
+    ['reveal', 'Lật vai người chết', ['ten', 'vai']], ['silenced', 'Người bị phù phép', ['ten']],
+    ['hunter_call', 'Gọi Thợ Săn', ['ten']], ['hunter_shot', 'Thợ Săn bắn', ['ten']], ['hunter_skip', 'Thợ Săn không bắn']]],
+  ['Ban ngày', [['discuss', 'Bắt đầu thảo luận', ['thoi_gian']], ['ready', 'Đa số bấm Vote ngay'],
+    ['host_skip', 'Quản trò cho bỏ phiếu ngay'], ['vote', 'Bắt đầu bỏ phiếu'],
+    ['lynch', 'Có người bị treo cổ', ['ten', 'so_phieu']], ['no_lynch', 'Không ai bị treo cổ']]],
+  ['Kết thúc', [['end', 'Công bố phe thắng', ['phe_thang']], ['thanks', 'Lời chào cuối']]],
+];
+const PH_LABEL = {dem:'số đêm', vai:'tên vai', nguoi_chet:'tên người chết', ten:'tên người', so_phieu:'số phiếu',
+  thoi_gian:'thời gian', phe_thang:'phe thắng'};
+const SAMPLE = {dem:1, vai:'Bảo Vệ', nguoi_chet:'An và Bình', ten:'An', so_phieu:5, thoi_gian:'3 phút', phe_thang:'Phe Dân Làng'};
+let editorOpen = false, pendingRender = false, scriptsSynced = false, saveTimer = null;
+const fillSample = t => t.replace(/\{(\w+)\}/g, (m, k) => k in SAMPLE ? SAMPLE[k] : m);
+const scriptText = key => S.settings.scripts?.[key] || S.script_defaults?.[key] || '';
+
+function scriptEditor(){
+  if (!S.script_defaults) return '';
+  const nCustom = Object.keys(S.settings.scripts || {}).length;
+  const line = ([key, label, phs = []]) => {
+    const text = scriptText(key), custom = !!S.settings.scripts?.[key];
+    const unknown = [...text.matchAll(/\{(\w+)\}/g)].map(m => m[1]).filter(k => !phs.includes(k));
+    return `<div class="sline ${custom ? 'custom' : ''}"><label><b>${label}</b>${custom ? ' · đã sửa' : ''}</label>
+      <textarea data-script="${key}" rows="3" maxlength="300">${esc(text)}</textarea>
+      ${unknown.length ? `<div class="bad">Chỗ trống không dùng được ở câu này: ${unknown.map(k => `{${esc(k)}}`).join(', ')}</div>` : ''}
+      <div class="tools">${phs.map(p => `<button class="ph" data-ph="${p}" data-for="${key}">+ {${p}} ${PH_LABEL[p]}</button>`).join('')}
+        <button data-preview="${key}">🔊 Nghe</button>${custom ? `<button data-reset="${key}">↺ Mặc định</button>` : ''}</div></div>`;
+  };
+  return `<details class="scripts" id="scriptEditor" ${editorOpen ? 'open' : ''}>
+    <summary>✏️ Chỉnh lời quản trò${nCustom ? ` (${nCustom} câu đã sửa)` : ''}</summary>
+    <p class="muted" style="font-size:14px">Sửa chữ rồi chạm ra ngoài là lưu, có hiệu lực ngay cả khi đang chơi. Chữ trong ngoặc nhọn như {ten} là chỗ máy tự điền. Lời bạn sửa được nhớ trên máy này cho các phòng sau.</p>
+    ${SCRIPT_GROUPS.map(([title, lines]) => `<h4>${title}</h4>${lines.map(line).join('')}`).join('')}
+    ${nCustom ? '<div style="margin-top:14px"><button class="btn" data-do="reset_all_scripts">↺ Trả tất cả về lời mặc định</button></div>' : ''}
+  </details>`;
+}
+function saveScript(key, text){
+  const local = load('masoi_scripts') || {};
+  if (text.trim() && text.trim() !== S.script_defaults[key]) local[key] = text.trim(); else delete local[key];
+  save('masoi_scripts', local);
+  send({type:'settings', settings:{scripts:{[key]: text}}});
+}
+function previewSpeak(text){
+  if (!tts){ toast(text); return; }
+  audioReady = true; tts.cancel(); speaking = false;
+  speakQueue.unshift(text); pump();
+}
 
 /* ---------------- giọng quản trò (Web Speech API) ---------------- */
 let voices = [], voiceName = load('masoi_voice'), rate = load('masoi_rate') || 1, muted = false;
@@ -399,8 +477,9 @@ function renderHome(){
       <p class="sub">Không cần quản trò. Điện thoại của mỗi người lo phần còn lại.</p>
       <label class="field"><span>Tên của bạn</span>
         <input id="name" maxlength="20" autocomplete="nickname" value="${esc(load('masoi_name') || '')}"></label>
-      <button class="btn primary" data-do="create">Tạo phòng – tôi cũng chơi</button>
-      <button class="btn" data-do="create_narrator">🎙️ Tạo phòng – máy này làm quản trò</button>
+      <button class="btn primary" data-do="create">🌐 Chơi online (quét QR)</button>
+      <button class="btn" data-do="create_bots">🤖 Chơi với máy</button>
+      <button class="btn" data-do="create_narrator">🎙️ Máy này làm quản trò</button>
       <p class="or">hoặc vào phòng của bạn bè</p>
       <label class="field"><span>Mã phòng (4 chữ)</span>
         <input id="code" maxlength="4" autocapitalize="characters" autocomplete="off" value="${esc(room)}"></label>
@@ -464,7 +543,11 @@ function renderLobby(){
       <p>Mở camera điện thoại và quét để vào phòng. Phải dùng chung Wi-Fi hoặc điểm phát sóng với máy chủ.</p>
       <p style="opacity:.6">Chạm để đóng</p></div>` : ''}
 
-    ${S.me.narrator ? audioPanel() : ''}
+    ${S.me.is_host ? modePanel() : ''}
+    ${S.me.narrator ? audioPanel() + scriptEditor()
+      : S.me.is_host ? `<button class="toggle ${S.settings.host_voice ? 'on' : ''}" data-do="host_voice" style="margin-top:6px">
+          <span>🔊 Máy tôi đọc lời quản trò (khi không có máy quản trò riêng)</span><i></i></button>
+          ${S.settings.host_voice ? audioPanel() + scriptEditor() : ''}` : ''}
     ${S.narrator ? `<p class="muted" style="margin-top:12px">🎙️ Quản trò: ${esc(S.narrator.name)}${S.narrator.connected ? '' : ' (mất kết nối)'}</p>` : ''}
     <div class="section"><h3>Người chơi</h3></div>
     <div class="chips">${S.players.map(p => `<span class="chip ${p.connected ? '' : 'off'}">
@@ -484,6 +567,8 @@ function renderLobby(){
     <div class="opt"><span>Bỏ phiếu</span>${seg('vote_seconds', [30,60,90], v => `${v}s`)}</div>
     <button class="toggle ${S.settings.reveal_role_on_death ? 'on' : ''}" ${host ? 'data-do="reveal"' : 'disabled'}>
       <span>Lật vai người chết</span><i></i></button>
+    <button class="toggle ${S.settings.fast_turns ? 'on' : ''}" ${host ? 'data-do="fast"' : 'disabled'}>
+      <span>Chọn xong là sang lượt tiếp (tiết kiệm thời gian)</span><i></i></button>
 
     <div style="margin-top:24px">
     ${host ? `<button class="btn primary" data-do="start" ${problem ? 'disabled' : ''}>Bắt đầu ván</button>`
@@ -500,6 +585,7 @@ function renderGame(){
     <div class="bar"><div><h2>${PHASE[ph]}</h2><span class="meta">${night ? 'Đêm' : 'Ngày'} ${Math.max(1, S.day)}</span></div>${timerLabel}</div>
     ${!S.me.alive && !a ? `<div class="dead-banner">💀 Bạn đã chết. Hãy giữ im lặng, không ra hiệu cho ai.</div>` : ''}
     ${S.me.alive && S.silenced === S.me.id && !night ? `<div class="dead-banner">🤐 Bạn bị phù phép – không được nói trong buổi thảo luận hôm nay. Vẫn được bỏ phiếu.</div>` : ''}
+    ${S.me.is_host && S.settings.host_voice && !audioReady ? `<button class="btn primary" data-do="unlock" style="margin-bottom:14px">🔊 Chạm để bật giọng quản trò</button>` : ''}
     ${a ? renderAction(a) : renderPassive()}
     <details class="log"><summary>Nhật ký ván chơi</summary>
       ${S.log.slice().reverse().map(l => `<p>${esc(l.text)}</p>`).join('')}</details>
@@ -524,15 +610,27 @@ function renderPassive(){
   if (ph === 'day_discuss') return `
     <div class="stage" style="padding-top:4vh"><div class="big">☀️</div><h2>Cả làng thảo luận</h2>
       <p>Ai đáng ngờ? Nói ra lập luận của bạn trước khi bỏ phiếu.</p></div>
+    ${S.me.alive ? `<div style="margin-bottom:16px"><button class="btn ${S.ready.me ? '' : 'primary'}" data-ack="ready_vote">
+      ${S.ready.me ? '✓ Bạn đã sẵn sàng (bấm để huỷ)' : '🗳️ Vote ngay'}</button>
+      <p class="muted" style="text-align:center;margin-top:8px;font-size:14px">${S.ready.count}/${S.ready.need} người cần để bỏ phiếu ngay</p></div>` : ''}
+    ${chatter()}
     ${board()}
-    ${S.me.is_host ? `<div style="margin-top:18px"><button class="btn" data-do="skipdisc">Mọi người đã sẵn sàng – bỏ phiếu ngay</button></div>` : ''}`;
+    ${S.me.is_host ? `<div style="margin-top:18px"><button class="btn" data-do="skipdisc">Chủ phòng: bỏ phiếu ngay</button></div>` : ''}`;
   if (ph === 'day_vote') return `<div class="panel"><h2>Đang bỏ phiếu</h2><p>Kết quả hiện ngay khi có phiếu.</p></div>${tally()}`;
   return '';
 }
 
+function chatter(){
+  let start = 0;
+  S.log.forEach((l, k) => { if (l.text.startsWith('☀️')) start = k; });
+  const lines = S.log.slice(Math.max(0, start)).filter(l => l.text.startsWith('💬')).slice(-5);
+  return lines.length ? `<div class="potion" style="margin-bottom:16px"><h3>Máy chơi đang nói</h3>
+    ${lines.map(l => `<p style="margin:6px 0;color:var(--bone)">${esc(l.text.replace('💬 ', ''))}</p>`).join('')}</div>` : '';
+}
+
 function board(){
   return `<div class="grid">${S.players.map(p => `<div class="pcard ${p.alive ? '' : 'dead'}">
-    <span class="av">${esc(initials(p.name))}</span><span class="pn">${esc(p.name)}${p.id === S.silenced ? ' 🤐' : ''}</span>
+    <span class="av">${esc(initials(p.name))}</span><span class="pn">${esc(p.name.replace('🤖 ', ''))}${p.id === S.silenced ? ' 🤐' : ''}</span>
     ${p.role && !p.alive ? `<span class="who">${ROLE[p.role].name}</span>` : ''}</div>`).join('')}</div>`;
 }
 
@@ -551,7 +649,7 @@ function tally(){
 function grid(ids, chosen = [], extra){
   const sel = picks.length ? picks : chosen;
   return `<div class="grid">${ids.map(id => `<button class="pcard ${sel.includes(id) ? 'sel' : ''}" data-pick="${id}">
-    <span class="av">${esc(initials(P(id).name))}</span><span class="pn">${esc(P(id).name)}</span>${extra ? extra(id) : ''}</button>`).join('')}</div>`;
+    <span class="av">${esc(initials(P(id).name))}</span><span class="pn">${esc(P(id).name.replace('🤖 ', ''))}</span>${extra ? extra(id) : ''}</button>`).join('')}</div>`;
 }
 
 function confirmBar(a, K){
@@ -583,7 +681,7 @@ function renderAction(a){
   if (a.kind === 'guard') desc = a.last ? `Đêm qua bạn đã bảo vệ ${esc(P(a.last).name)}, đêm nay phải chọn người khác.` : 'Có thể chọn cả chính bạn.';
   if (a.kind === 'wolf_vote') {
     desc = a.pick > 1 ? 'Sói Con đã chết – đêm nay bầy được cắn 2 người. Cả bầy cần chọn giống nhau.'
-                      : 'Cả bầy cần chọn cùng một người. Hết giờ sẽ theo số đông.';
+                      : 'Cả bầy chọn cùng một người là xong lượt ngay. Hết giờ sẽ theo số đông.';
     const by = id => Object.entries(a.team_votes).filter(([, ts]) => ts.includes(id)).map(([w]) => P(w).name);
     extra = id => by(id).length ? `<span class="badge">${by(id).length}</span><span class="who">${esc(by(id).join(', '))}</span>` : '';
   }
@@ -674,8 +772,11 @@ function renderNarrator(){
     <div class="narr-tools">
       <button class="btn" data-do="repeat">🔁 Nhắc lại</button>
       <button class="btn" data-do="mute">${muted ? '🔈 Bật tiếng' : '🔇 Tắt tiếng'}</button></div>
-    ${ph === 'day_discuss' ? `<div style="margin-top:12px"><button class="btn primary" data-do="skipdisc">Mọi người đã sẵn sàng – bỏ phiếu ngay</button></div>` : ''}
+    ${ph === 'day_discuss' ? chatter() : ''}
+    ${ph === 'day_discuss' ? `<div style="margin-top:12px"><button class="btn primary" data-do="skipdisc">🗳️ Vote ngay</button>
+      <p class="muted" style="text-align:center;margin-top:8px;font-size:14px">${S.ready.count}/${S.ready.need} người chơi đã bấm Vote ngay</p></div>` : ''}
     ${ph === 'day_vote' ? tally() : ''}
+    ${scriptEditor()}
     <details class="log"><summary>Nhật ký công khai</summary>
       ${S.log.slice().reverse().map(l => `<p>${esc(l.text)}</p>`).join('')}</details>
     <button class="role-btn" id="roleBtn">Giữ để xem bài của mọi người</button>
@@ -686,6 +787,20 @@ function renderNarrator(){
     ${!audioReady && !muted ? `<div class="unlock"><div class="big" style="font-size:64px">🔊</div>
       <h2>Chạm để bật giọng quản trò</h2><p class="muted">Trình duyệt cần bạn chạm một lần mới cho phát âm thanh.</p>
       <button class="btn primary" data-do="unlock" style="max-width:320px">Bật âm thanh</button></div>` : ''}`;
+}
+
+function modePanel(){
+  const bots = S.players.filter(p => p.bot).length, humans = S.players.length - bots;
+  return `<div class="audio-box"><h3>Chế độ chơi</h3>
+    <div class="seg" style="margin-bottom:10px">
+      <button class="${bots ? '' : 'on'}" data-do="mode_online">🌐 Online</button>
+      <button class="${bots ? 'on' : ''}" data-do="mode_bots">🤖 Có máy chơi</button></div>
+    ${bots ? `<p>${humans} người thật + ${bots} máy chơi. Máy tự chọn mục tiêu ban đêm, lên tiếng lúc thảo luận và bỏ phiếu như người.</p>
+      <div class="rrow" style="border:0;padding:4px 0"><span class="ricon">🤖</span><div class="rinfo"><b>Số máy chơi</b></div>
+        <div class="stepper"><button data-do="bot_remove" aria-label="Bớt máy">−</button><output>${bots}</output>
+        <button data-do="bot_add" aria-label="Thêm máy">+</button></div></div>
+      <div class="presets">${[8, 10, 12, 16, 20].filter(n => n > humans).map(n => `<button data-fill="${n}">Lấp đủ ${n} người</button>`).join('')}</div>`
+    : '<p>Chỉ người thật. Mọi người quét mã QR để vào phòng.</p>'}</div>`;
 }
 
 function audioPanel(){
@@ -731,6 +846,19 @@ app.addEventListener('click', async e => {
     roles.werewolf = Math.max(0, Math.min(30, (roles.werewolf || 0) + Number(b.dataset.d)));
     send({type:'settings', settings:{roles}}); return;
   }
+  if (b.dataset.preview){
+    const ta = document.querySelector(`[data-script="${b.dataset.preview}"]`);
+    previewSpeak(fillSample(ta ? ta.value : scriptText(b.dataset.preview))); return;
+  }
+  if (b.dataset.reset){ saveScript(b.dataset.reset, ''); return; }
+  if (b.dataset.ph){
+    const ta = document.querySelector(`[data-script="${b.dataset.for}"]`); if (!ta) return;
+    const at = ta.selectionStart ?? ta.value.length, tag = `{${b.dataset.ph}}`;
+    ta.value = ta.value.slice(0, at) + tag + ta.value.slice(ta.selectionEnd ?? at);
+    ta.focus(); ta.selectionStart = ta.selectionEnd = at + tag.length;
+    saveScript(b.dataset.for, ta.value); return;
+  }
+  if (b.dataset.fill){ send({type:'bots', op:'fill', n:Number(b.dataset.fill)}); return; }
   if (b.dataset.rate){ rate = Number(b.dataset.rate); save('masoi_rate', rate); render(); return; }
   if (b.dataset.set){ send({type:'settings', settings:{[b.dataset.set]: Number(b.dataset.v)}}); return; }
 
@@ -738,12 +866,26 @@ app.addEventListener('click', async e => {
   try {
     switch (b.dataset.do){
       case 'create': session = await api('/api/rooms', {name:name()}); break;
+      case 'create_bots': session = await api('/api/rooms', {name:name()}); pendingBots = true; unlockAudio(); break;
+      case 'mode_online': send({type:'bots', op:'fill', n: S.players.filter(p => !p.bot).length}); return;
+      case 'mode_bots': send({type:'bots', op:'fill', n: Math.max(8, S.players.length + 1)}); return;
+      case 'bot_add': send({type:'bots', op:'add'}); return;
+      case 'bot_remove': send({type:'bots', op:'remove'}); return;
+      case 'host_voice': {
+        const on = !S.settings.host_voice;
+        if (on) unlockAudio();
+        send({type:'settings', settings:{host_voice: on}}); return;
+      }
       case 'create_narrator': {
         const v = $('#name').value.trim();
         session = await api('/api/rooms', {name:v ? `🎙️ ${v}` : 'Quản trò', narrator:true});
         unlockAudio(); break;
       }
       case 'unlock': unlockAudio(); render(); return;
+      case 'reset_all_scripts': {
+        const all = {}; Object.keys(S.script_defaults).forEach(k => all[k] = '');
+        save('masoi_scripts', {}); send({type:'settings', settings:{scripts: all}}); return;
+      }
       case 'repeat': if (currentLine){ speakQueue.unshift(currentLine); pump(); } return;
       case 'mute': muted = !muted; if (muted) tts?.cancel(); speaking = false; render(); pump(); return;
       case 'replay_recap': {
@@ -778,6 +920,7 @@ app.addEventListener('click', async e => {
         send({type:'settings', settings:{roles}}); return;
       }
       case 'reveal': send({type:'settings', settings:{reveal_role_on_death: !S.settings.reveal_role_on_death}}); return;
+      case 'fast': send({type:'settings', settings:{fast_turns: !S.settings.fast_turns}}); return;
       case 'start': send({type:'start'}); return;
       case 'restart': send({type:'restart'}); return;
       case 'leave':
@@ -793,6 +936,16 @@ app.addEventListener('click', async e => {
   } catch (err) { toast(err.message); }
 });
 
+app.addEventListener('toggle', e => { if (e.target.id === 'scriptEditor') editorOpen = e.target.open; }, true);
+app.addEventListener('input', e => {
+  const key = e.target.dataset?.script; if (!key) return;
+  clearTimeout(saveTimer); saveTimer = setTimeout(() => saveScript(key, e.target.value), 800);
+});
+app.addEventListener('focusout', e => {
+  const key = e.target.dataset?.script; if (!key) return;
+  clearTimeout(saveTimer); saveScript(key, e.target.value);
+  setTimeout(() => { if (pendingRender && !document.activeElement?.dataset?.script){ pendingRender = false; render(); } }, 50);
+});
 app.addEventListener('change', e => {
   if (e.target.id === 'voice'){ voiceName = e.target.value; save('masoi_voice', voiceName); unlockAudio(); }
 });
