@@ -47,7 +47,7 @@ pip install -r requirements.txt
 python main.py
 ```
 
-Muốn thử một mình, mở 4 tab ẩn danh (`MIN_PLAYERS = 4` trong `game.py`; đổi thành 10 khi chơi thật). Kiểm tra engine bằng bot: `python simulate.py`.
+Muốn thử một mình, mở 4 tab ẩn danh (`MIN_PLAYERS = 4` trong `game.py`; đổi thành 10 khi chơi thật). Kiểm tra engine bằng bot: `python simulate.py` (80 ván, một nửa bật đủ 16 vai).
 
 ```
 masoi/
@@ -75,16 +75,25 @@ Trạng thái lúc chơi (`game.py`): `Room` chứa `players`, `settings`, `phas
 
 Lịch sử lâu dài (`schema.sql`): `rooms` → `games` → `game_players` (ghế, vai, đêm chết, nguyên nhân) và `game_actions` (mọi hành động theo thứ tự, đủ để phát lại cả ván).
 
-**Chia vai mặc định** (`suggest_roles`): Sói = ⌊n/4⌋, mỗi vai Tiên tri, Bảo vệ, Phù thủy một người, Thợ săn từ 8 người trở lên, còn lại là Dân làng. Ví dụ 10 người → 2 Sói; 20 người → 5 Sói; 30 người → 7 Sói. Host có thể tự chỉnh; server kiểm tra tổng vai bằng số người và Sói luôn ít hơn phe Dân. Vai được xáo bằng `random.shuffle` trên server, client không bao giờ biết vai người khác.
+**16 vai**, Host bật/tắt từng vai ở phòng chờ (Ma Sói chỉnh số lượng, Dân Làng tự lấp chỗ trống). Nút *Gợi ý theo số người* chia sẵn: Sói khoảng ¼ số người, càng đông càng thêm vai đặc biệt.
+
+- Phe Dân Làng: Dân Làng, Bảo Vệ, Tiên Tri, Phù Thủy, Thợ Săn, Người Bệnh, Nguyệt Nữ, Kẻ Phù Phép.
+- Phe Ma Sói: Ma Sói, Sói Biến Chủng, Sói Con, Sói Băng.
+- Phe thứ ba & biến đổi: Kẻ Bị Nguyền, Kẻ Phản Bội, Kẻ Nhân Bản, Kẻ Sáng Tạo.
+
+Thứ tự đêm: Kẻ Sáng Tạo chọn vai lúc chia bài → Kẻ Nhân Bản (chỉ đêm 1) → Nguyệt Nữ → Sói Băng → Bảo Vệ → Bầy sói → Tiên Tri → Phù Thủy → Kẻ Phù Phép.
 
 **Luật đã cài**:
-- Bảo vệ không được che một người hai đêm liền; không chặn được bình độc.
-- Bầy sói phải chọn cùng một con mồi để kết thúc sớm; hết giờ thì theo số đông, hoà thì bốc thăm. Sói không cắn được đồng đội.
-- Tiên tri thấy kết quả "là sói / không phải sói", bấm "Đã ghi nhớ" mới kết thúc lượt.
-- Phù thủy thấy người bị cắn khi còn bình cứu; có thể dùng cả hai bình trong một đêm.
-- Thợ săn chết vì sói hoặc bị treo thì được bắn một người; chết vì bình độc thì không. Phát bắn xảy ra trước khi xét thắng thua.
-- Treo cổ cần đa số tương đối; hoà hoặc phiếu trắng nhiều bằng/hơn thì không ai chết.
-- Dân thắng khi hết Sói; Sói thắng khi số Sói ≥ số người còn lại.
+- Bảo Vệ không che một người hai đêm liền. Nguyệt Nữ chọn soi đúng vai một người, hoặc che chắn một người khỏi bị cắn và bị phong ấn.
+- Phù Thủy cứu trúng người đã được bảo vệ thì được hoàn bình cứu; đầu độc người đằng nào cũng chết vì sói thì được hoàn bình độc.
+- Thợ Săn chỉ được bắn khi chết trong đêm.
+- Người Bệnh bị cắn chết thì đêm sau bầy không cắn. Sói Con chết thì đêm sau bầy cắn 2 người.
+- Sói Băng phong ấn một người: Bảo Vệ, Tiên Tri, Phù Thủy, Kẻ Phù Phép mất lượt; Thợ Săn không bắn được; Người Bệnh mất tác dụng.
+- Sói Biến Chủng là Dân Làng trong đêm 1 (Tiên Tri soi ra Dân), từ đêm 2 vào bầy.
+- Kẻ Bị Nguyền bị cắn thì hoá sói. Kẻ Phản Bội soi ra Dân; khi sói chết hết thì hoá Ma Sói cuối cùng.
+- Kẻ Nhân Bản nhận vai và phe khi mục tiêu chết. Có Kẻ Sáng Tạo thì cần thêm 2 lá: 2 lá dư được Kẻ Sáng Tạo xem và chọn 1.
+- Treo cổ cần đa số tương đối; hoà hoặc phiếu trắng nhiều bằng/hơn thì không ai chết. Người bị phù phép vẫn được bỏ phiếu.
+- Dân thắng khi hết sói (và không còn Sói Biến Chủng hay Kẻ Phản Bội chờ hoá sói). Sói thắng khi số sói bằng hoặc nhiều hơn số người còn lại.
 
 **Chống lộ thông tin**: vai đã chết vẫn có lượt "thức dậy" giả 3–6 giây; người chết trong đêm được xáo thứ tự nên không biết ai chết vì sói, ai vì độc; mỗi điện thoại nhận một gói `state` riêng qua `view_for(pid)`.
 
@@ -128,5 +137,5 @@ Bầu trời là chỉ báo pha: đêm có nền chàm sâu, ngày chuyển sang
 
 - Nhiều worker/máy chủ: lưu `Room` vào Redis, dùng Redis pub/sub để phát `state`, bật sticky session ở load balancer, và chạy vòng lặp ván ở một worker giữ khoá phòng.
 - Ghi `game_actions` vào PostgreSQL theo lô sau mỗi pha để làm thống kê, phát lại ván.
-- Thêm âm thanh lời dẫn (Web Speech API) phát trên máy Host, chat riêng cho bầy sói, thêm vai (Cupid, Già làng…) bằng cách thêm bước vào `_night()`.
+- Thêm âm thanh lời dẫn (Web Speech API) phát trên máy Host, chat riêng cho bầy sói, thêm vai bằng cách thêm bước vào `_night()`.
 - Bảo mật: HTTPS/WSS, giới hạn tốc độ tạo phòng, rút ngắn `ROOM_TTL`.
