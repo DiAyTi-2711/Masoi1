@@ -1,0 +1,573 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0e1124">
+<title>Ma Sói</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&family=Lora:ital,wght@0,500;0,700;1,500&display=swap" rel="stylesheet">
+<style>
+:root{
+  /* Bầu trời đổi theo pha: đêm chàm sâu, ngày nâu than hồng */
+  --sky:#0e1124; --sky-2:#171b36; --glow:rgba(230,222,203,.10);
+  --card:rgba(255,255,255,.045); --card-2:rgba(255,255,255,.08); --line:rgba(230,222,203,.13);
+  --bone:#e6decb; --mist:#9a9db5; --faint:#5f6380;
+  --lantern:#e8a84a; --blood:#c8414b; --pine:#4e9c8f; --violet:#9c86e8;
+  --sans:"Be Vietnam Pro",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --serif:"Lora",Georgia,"Times New Roman",serif;
+  color-scheme:dark;
+}
+body.day{ --sky:#1c1510; --sky-2:#2b1f15; --glow:rgba(232,168,74,.16); }
+*{box-sizing:border-box;margin:0}
+html,body{min-height:100%}
+body{
+  font:16px/1.5 var(--sans); color:var(--bone);
+  background:radial-gradient(120% 60% at 85% -10%, var(--glow), transparent 60%),
+             linear-gradient(180deg,var(--sky-2),var(--sky) 55%);
+  background-attachment:fixed; background-color:var(--sky);
+  padding:env(safe-area-inset-top,0) 0 env(safe-area-inset-bottom,0);
+  transition:background-color .8s;
+  -webkit-tap-highlight-color:transparent;
+}
+#app{max-width:520px;margin:0 auto;padding:16px 16px 110px}
+button{font:inherit;color:inherit;border:0;background:none;cursor:pointer}
+button:focus-visible,input:focus-visible{outline:2px solid var(--lantern);outline-offset:2px}
+h1,h2,h3{font-family:var(--serif);font-weight:700;line-height:1.2}
+small,.muted{color:var(--mist)}
+
+/* --- nút & ô nhập: vùng chạm tối thiểu 52px --- */
+.btn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;min-height:54px;
+  padding:0 20px;border-radius:14px;background:var(--card-2);border:1px solid var(--line);font-weight:600}
+.btn.primary{background:var(--lantern);color:#24170a;border-color:transparent}
+.btn.danger{background:var(--blood);color:#fff;border-color:transparent}
+.btn:disabled{opacity:.4}
+.btn+.btn{margin-top:10px}
+.field{display:block;margin:14px 0}
+.field span{display:block;font-size:14px;color:var(--mist);margin-bottom:6px}
+input{width:100%;min-height:54px;padding:0 16px;border-radius:14px;border:1px solid var(--line);
+  background:rgba(0,0,0,.25);color:var(--bone);font:inherit;font-size:18px}
+#code{letter-spacing:.3em;font-weight:700;text-transform:uppercase}
+
+/* --- màn hình chính --- */
+.home{padding-top:12vh}
+.moon{width:92px;height:92px;border-radius:50%;margin-bottom:28px;
+  background:radial-gradient(circle at 35% 35%,#f3ecd9,#cfc5ab 60%,#a99f86);
+  box-shadow:0 0 60px rgba(243,236,217,.25)}
+.title{font-size:56px;letter-spacing:-.01em}
+.sub{color:var(--mist);margin:6px 0 28px}
+.or{text-align:center;color:var(--faint);margin:22px 0 4px;font-size:14px}
+
+/* --- thanh trên cùng --- */
+.bar{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:18px}
+.bar h2{font-size:22px}
+.bar .meta{color:var(--mist);font-size:14px}
+.timer{font:700 22px/1 var(--sans);font-variant-numeric:tabular-nums;color:var(--lantern)}
+.timer.urgent{color:var(--blood)}
+
+/* --- phòng chờ --- */
+.invite{display:flex;gap:16px;align-items:center;padding:16px;border-radius:18px;
+  background:var(--card);border:1px solid var(--line);margin-bottom:20px}
+.qr{flex:none;width:132px;aspect-ratio:1;border-radius:12px;background:#f4efe2;padding:6px;display:grid;place-items:center}
+.qr svg{width:100%;height:100%;display:block}
+.qr svg path{fill:#14101f}
+.invite .info{flex:1;min-width:0}
+.invite b{display:block;font:700 34px/1.1 var(--serif);letter-spacing:.12em;margin:2px 0 6px}
+.invite .url{font-size:13px;color:var(--mist);word-break:break-all}
+.invite .links{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.invite .links button{padding:9px 12px;border-radius:10px;background:var(--card-2);font-size:14px}
+.qr-full{position:fixed;inset:0;z-index:15;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:18px;padding:24px;background:#f4efe2;color:#14101f;text-align:center}
+.qr-full .qr{width:min(84vw,420px);background:none;padding:0}
+.qr-full b{font:700 44px/1 var(--serif);letter-spacing:.14em}
+.qr-full p{font-size:15px;max-width:32ch}
+.codebox{display:flex;align-items:center;justify-content:space-between;padding:18px;border-radius:18px;
+  background:var(--card);border:1px solid var(--line);margin-bottom:20px}
+.codebox b{font:700 40px/1 var(--serif);letter-spacing:.12em}
+.codebox button{padding:10px 14px;border-radius:12px;background:var(--card-2);font-size:14px}
+.section{margin:24px 0 10px;display:flex;justify-content:space-between;align-items:baseline}
+.section h3{font-size:18px}
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{padding:8px 12px;border-radius:999px;background:var(--card);border:1px solid var(--line);font-size:14px}
+.chip.off{opacity:.45}
+.chip .host{color:var(--lantern)}
+.rrow{display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--line)}
+.ricon{font-size:26px;width:36px;text-align:center}
+.rinfo{flex:1;min-width:0}
+.rinfo small{display:block;font-size:13px;line-height:1.35}
+.stepper{display:flex;align-items:center;gap:4px}
+.stepper button{width:44px;height:44px;border-radius:12px;background:var(--card-2);font-size:22px}
+.stepper output,.count{min-width:28px;text-align:center;font-weight:700;font-size:18px}
+.total{padding:12px 14px;border-radius:12px;margin:14px 0;font-size:15px;background:var(--card)}
+.total.bad{color:#f0a3a8;background:rgba(200,65,75,.14)}
+.total.ok{color:#9fd8cf;background:rgba(78,156,143,.14)}
+.seg{display:flex;gap:6px;margin-top:6px}
+.seg button{flex:1;min-height:44px;border-radius:10px;background:var(--card);border:1px solid var(--line);font-size:14px}
+.seg button.on{background:var(--bone);color:var(--sky)}
+.opt{margin:14px 0}
+.opt>span{font-size:14px;color:var(--mist)}
+.toggle{padding:0;display:flex;justify-content:space-between;align-items:center;width:100%;min-height:52px;text-align:left}
+.toggle i{width:48px;height:28px;border-radius:99px;background:var(--card-2);position:relative;flex:none}
+.toggle i::after{content:"";position:absolute;top:3px;left:3px;width:22px;height:22px;border-radius:50%;background:var(--mist);transition:.2s}
+.toggle.on i{background:var(--pine)}.toggle.on i::after{left:23px;background:#fff}
+
+/* --- trong ván --- */
+.stage{text-align:center;padding:9vh 8px 6vh}
+.stage .big{font-size:64px;line-height:1}
+.stage h2{font-size:30px;margin:18px 0 8px}
+.stage p{color:var(--mist);max-width:30ch;margin:0 auto}
+.headline{font:500 24px/1.4 var(--serif);text-align:center;padding:8vh 8px;text-wrap:balance}
+.panel h2{font-size:26px;margin-bottom:4px}
+.panel>p{color:var(--mist);margin-bottom:16px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(98px,1fr));gap:10px}
+.pcard{position:relative;display:flex;flex-direction:column;align-items:center;gap:6px;padding:14px 6px 12px;
+  border-radius:16px;background:var(--card);border:1.5px solid var(--line);min-height:104px}
+.pcard.sel{border-color:var(--lantern);background:rgba(232,168,74,.13)}
+.pcard.dead{opacity:.35}
+.pcard.dead .pn{text-decoration:line-through}
+.av{width:46px;height:46px;border-radius:50%;display:grid;place-items:center;font-weight:700;
+  background:var(--card-2);font-size:17px}
+.pn{font-size:14px;line-height:1.2;text-align:center;word-break:break-word}
+.badge{position:absolute;top:6px;right:6px;min-width:24px;height:24px;padding:0 6px;border-radius:99px;
+  background:var(--blood);color:#fff;font-size:13px;font-weight:700;display:grid;place-items:center}
+.who{font-size:11px;color:#f0a3a8;line-height:1.2;text-align:center}
+.confirm{position:fixed;left:0;right:0;bottom:0;padding:12px 16px calc(12px + env(safe-area-inset-bottom,0));
+  background:linear-gradient(transparent,var(--sky) 30%);z-index:5}
+.confirm .btn{max-width:488px;margin:0 auto}
+.result{padding:22px;border-radius:18px;background:var(--card);border:1px solid var(--line);
+  font:500 22px/1.4 var(--serif);text-align:center;margin:12px 0 18px}
+.potion{padding:16px;border-radius:16px;background:var(--card);border:1px solid var(--line);margin-bottom:14px}
+.potion h3{font-size:18px;margin-bottom:6px}
+.potion p{color:var(--mist);margin-bottom:12px}
+.dead-banner{padding:12px 14px;border-radius:12px;background:rgba(200,65,75,.14);color:#f0a3a8;margin-bottom:16px;font-size:15px}
+.tally{margin-top:20px}
+.tally div{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--line)}
+details.log{margin-top:28px;border-top:1px solid var(--line);padding-top:12px}
+details.log summary{color:var(--mist);font-size:14px;min-height:44px;display:flex;align-items:center}
+details.log p{font-size:15px;padding:6px 0;color:var(--bone)}
+
+/* --- vai bí mật: giữ để xem --- */
+.role-btn{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(16px + env(safe-area-inset-bottom,0));
+  min-height:54px;padding:0 24px;border-radius:999px;background:var(--card-2);border:1px solid var(--line);
+  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);font-weight:600;z-index:4;
+  user-select:none;-webkit-user-select:none;touch-action:none;white-space:nowrap}
+body.has-confirm .role-btn{display:none}
+.reveal{position:fixed;inset:0;z-index:10;display:none;flex-direction:column;align-items:center;justify-content:center;
+  padding:24px;text-align:center;background:var(--sky);pointer-events:none}
+.reveal.show{display:flex}
+.reveal .big{font-size:84px}
+.reveal h2{font-size:40px;margin:12px 0 6px}
+.reveal .team{font-size:15px;margin-bottom:14px}
+.reveal ul{list-style:none;padding:0;max-width:34ch;color:var(--mist);font-size:15px}
+.reveal li{padding:4px 0}
+.t-wolf{color:var(--blood)}.t-village{color:var(--pine)}
+
+/* --- kết thúc --- */
+.win{text-align:center;padding:6vh 0 3vh}
+.win .big{font-size:72px}
+.win h2{font-size:34px;margin-top:10px}
+.roster div{display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--line)}
+.roster .dead{opacity:.55;text-decoration:line-through}
+
+.toast{position:fixed;left:16px;right:16px;top:calc(12px + env(safe-area-inset-top,0));max-width:488px;margin:0 auto;
+  padding:14px 16px;border-radius:14px;background:#3a1b1f;color:#f6d0d3;z-index:20;display:none}
+.toast.show{display:block}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body class="night">
+<main id="app"></main>
+<div class="toast" id="toast" role="alert"></div>
+
+<script>
+const ROLE = {
+  werewolf:{name:'Sói',icon:'🐺',team:'wolf',desc:'Mỗi đêm cùng bầy chọn một người để cắn.'},
+  seer:{name:'Tiên tri',icon:'🔮',team:'village',desc:'Mỗi đêm soi một người, biết họ có phải sói không.'},
+  bodyguard:{name:'Bảo vệ',icon:'🛡️',team:'village',desc:'Mỗi đêm che chở một người. Không bảo vệ ai hai đêm liền.'},
+  witch:{name:'Phù thủy',icon:'🧪',team:'village',desc:'Có một bình cứu và một bình độc, mỗi bình dùng một lần.'},
+  hunter:{name:'Thợ săn',icon:'🏹',team:'village',desc:'Khi chết được bắn chết một người theo cùng.'},
+  villager:{name:'Dân làng',icon:'🧑‍🌾',team:'village',desc:'Không có phép, chỉ có lý lẽ. Tìm và treo cổ sói.'},
+};
+const ROLE_ORDER = ['werewolf','seer','bodyguard','witch','hunter','villager'];
+const SINGLE = new Set(['seer','bodyguard','witch','hunter']);
+const PHASE = {
+  lobby:'Phòng chờ', night_guard:'Bảo vệ thức dậy', night_wolves:'Bầy sói thức dậy',
+  night_seer:'Tiên tri thức dậy', night_witch:'Phù thủy thức dậy', dawn:'Bình minh',
+  day_discuss:'Thảo luận', day_vote:'Bỏ phiếu treo cổ', verdict:'Phán quyết',
+  hunter_shot:'Phát súng cuối', ended:'Kết thúc',
+};
+
+const $ = s => document.querySelector(s);
+const app = $('#app');
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const initials = n => n.trim().split(/\s+/).slice(-2).map(w => w[0]).join('').toUpperCase();
+
+let invite = null, qrFull = false;
+let S = null, ws = null, clockOffset = 0, pick = null, stepKey = '', revealing = false, wakeLock = null;
+let session = load('masoi_session');
+
+function load(k){ try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } }
+function save(k, v){ try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, JSON.stringify(v)); } catch {} }
+const P = id => S.players.find(p => p.id === id) || {name:'?'};
+
+function toast(msg){
+  const t = $('#toast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('show'), 3200);
+}
+function send(obj){ if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); else toast('Mất kết nối, đang thử lại…'); }
+const act = (action, target = null) => send({type:'action', action, target});
+
+async function api(path, body){
+  const r = await fetch(path, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(typeof d.detail === 'string' ? d.detail : 'Không kết nối được máy chủ');
+  return d;
+}
+
+/* ---------------- kết nối ---------------- */
+function connect(){
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const q = new URLSearchParams({pid:session.player_id, token:session.token});
+  ws = new WebSocket(`${proto}://${location.host}/ws/${session.code}?${q}`);
+  ws.onmessage = e => {
+    const m = JSON.parse(e.data);
+    if (m.type === 'state'){ S = m; clockOffset = m.server_now * 1000 - Date.now(); onState(); }
+    else if (m.type === 'error') toast(m.message);
+  };
+  ws.onclose = e => {
+    if (e.code === 4401 || e.code === 4403){ save('masoi_session', null); session = null; S = null;
+      if (e.code === 4403) toast('Bạn đã bị mời ra khỏi phòng'); render(); return; }
+    if (e.code === 4409 || !session) return;           // đã mở ở tab khác / tự rời
+    setTimeout(() => session && connect(), 1500);       // mất mạng: tự nối lại
+  };
+}
+
+function onState(){
+  const key = `${S.phase}-${S.day}`;
+  if (key !== stepKey){ stepKey = key; pick = null; if (S.action) navigator.vibrate?.([120,60,120]); }
+  if (S.phase !== 'lobby') keepAwake();
+  render();
+}
+
+async function keepAwake(){
+  if (wakeLock || !('wakeLock' in navigator)) return;
+  try { wakeLock = await navigator.wakeLock.request('screen'); wakeLock.onrelease = () => wakeLock = null; } catch {}
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden && S && S.phase !== 'lobby') keepAwake(); });
+
+/* ---------------- render ---------------- */
+function render(){
+  document.body.classList.remove('has-confirm');
+  if (!session || !S){ renderHome(); return; }
+  if (S.phase === 'lobby') renderLobby();
+  else if (S.phase === 'ended') renderEnd();
+  else renderGame();
+  tick();
+}
+
+function renderHome(){
+  document.body.className = 'night';
+  const room = (new URLSearchParams(location.search).get('room') || '').toUpperCase();
+  if (room){   // mở từ mã QR: chỉ cần nhập tên
+    app.innerHTML = `
+    <div class="home">
+      <div class="moon" aria-hidden="true"></div>
+      <h1 class="title">Ma Sói</h1>
+      <p class="sub">Bạn được mời vào phòng <b>${esc(room)}</b>. Nhập tên để ngồi vào bàn.</p>
+      <input id="code" type="hidden" value="${esc(room)}">
+      <label class="field"><span>Tên của bạn</span>
+        <input id="name" maxlength="20" autocomplete="nickname" value="${esc(load('masoi_name') || '')}"></label>
+      <button class="btn primary" data-do="join">Vào phòng ${esc(room)}</button>
+      <button class="btn" data-do="nolink">Tạo phòng khác</button>
+    </div>`;
+    return;
+  }
+  app.innerHTML = `
+    <div class="home">
+      <div class="moon" aria-hidden="true"></div>
+      <h1 class="title">Ma Sói</h1>
+      <p class="sub">Không cần quản trò. Điện thoại của mỗi người lo phần còn lại.</p>
+      <label class="field"><span>Tên của bạn</span>
+        <input id="name" maxlength="20" autocomplete="nickname" value="${esc(load('masoi_name') || '')}"></label>
+      <button class="btn primary" data-do="create">Tạo phòng mới</button>
+      <p class="or">hoặc vào phòng của bạn bè</p>
+      <label class="field"><span>Mã phòng (4 chữ)</span>
+        <input id="code" maxlength="4" autocapitalize="characters" autocomplete="off" value="${esc(room)}"></label>
+      <button class="btn" data-do="join">Vào phòng</button>
+    </div>`;
+}
+
+async function loadInvite(i = 0){
+  try {
+    const r = await fetch(`/api/rooms/${S.code}/invite?i=${i}`);
+    if (!r.ok) return;
+    invite = {...await r.json(), code:S.code};
+    if (S.phase === 'lobby') render();
+  } catch {}
+}
+
+function renderLobby(){
+  document.body.className = 'night';
+  if (!invite || invite.code !== S.code){ if (!loadInvite.busy){ loadInvite.busy = true; loadInvite().finally(() => loadInvite.busy = false); } }
+  const host = S.me.is_host, n = S.players.length, r = S.settings.roles;
+  const total = ROLE_ORDER.reduce((a, k) => a + (r[k] || 0), 0), wolves = r.werewolf || 0;
+  let problem = '';
+  if (n < S.limits.min) problem = `Cần thêm ${S.limits.min - n} người nữa`;
+  else if (total !== n) problem = `Đang có ${total} vai cho ${n} người – hãy chỉnh cho khớp`;
+  else if (wolves < 1) problem = 'Cần ít nhất 1 Sói';
+  else if (wolves >= n - wolves) problem = 'Sói đang ngang hoặc đông hơn Dân';
+  const seg = (key, opts, fmt) => `<div class="seg">${opts.map(v =>
+      `<button class="${S.settings[key] === v ? 'on' : ''}" ${host ? `data-set="${key}" data-v="${v}"` : 'disabled'}>${fmt(v)}</button>`).join('')}</div>`;
+  const mins = v => v >= 60 ? `${v/60} phút` : `${v} giây`;
+
+  app.innerHTML = `
+    <div class="bar"><h2>Phòng chờ</h2><span class="meta">${n}/${S.limits.max} người</span></div>
+    <div class="invite">
+      <button class="qr" data-do="qrbig" aria-label="Phóng to mã QR">${invite?.code === S.code ? invite.svg : ''}</button>
+      <div class="info"><small>Quét mã hoặc nhập mã phòng</small><b>${S.code}</b>
+        <div class="url">${invite?.code === S.code ? esc(invite.url) : 'Đang lấy địa chỉ…'}</div>
+        <div class="links"><button data-do="qrbig">Phóng to</button><button data-do="share">Gửi link</button>
+        ${invite?.count > 1 ? '<button data-do="nextip">Không vào được?</button>' : ''}</div></div></div>
+    ${qrFull && invite ? `<div class="qr-full" data-do="qrclose" role="dialog">
+      <div class="qr">${invite.svg}</div><b>${S.code}</b>
+      <p>Mở camera điện thoại và quét để vào phòng. Phải dùng chung Wi-Fi hoặc điểm phát sóng với máy chủ.</p>
+      <p style="opacity:.6">Chạm để đóng</p></div>` : ''}
+
+    <div class="section"><h3>Người chơi</h3></div>
+    <div class="chips">${S.players.map(p => `<span class="chip ${p.connected ? '' : 'off'}">
+      ${p.is_host ? '<span class="host">★</span> ' : ''}${esc(p.name)}${p.id === S.me.id ? ' (bạn)' : ''}</span>`).join('')}</div>
+
+    <div class="section"><h3>Vai trong ván</h3>
+      ${host ? `<button class="muted" data-do="auto">${S.roles_custom ? 'Chia tự động' : 'Đang chia tự động'}</button>` : ''}</div>
+    ${ROLE_ORDER.map(k => `<div class="rrow"><span class="ricon">${ROLE[k].icon}</span>
+      <div class="rinfo"><b>${ROLE[k].name}</b><small>${ROLE[k].desc}</small></div>
+      ${host ? `<div class="stepper"><button data-role="${k}" data-d="-1" aria-label="Bớt ${ROLE[k].name}">−</button>
+        <output>${r[k] || 0}</output><button data-role="${k}" data-d="1" aria-label="Thêm ${ROLE[k].name}">+</button></div>`
+        : `<span class="count">${r[k] || 0}</span>`}</div>`).join('')}
+    <div class="total ${problem ? 'bad' : 'ok'}">${problem || `Đủ ${n} vai cho ${n} người. Sẵn sàng.`}</div>
+
+    <div class="opt"><span>Thời gian mỗi lượt đêm</span>${seg('night_step_seconds', [20,30,45,60], v => `${v}s`)}</div>
+    <div class="opt"><span>Thảo luận ban ngày</span>${seg('discuss_seconds', [60,120,180,300], mins)}</div>
+    <div class="opt"><span>Bỏ phiếu</span>${seg('vote_seconds', [30,60,90], v => `${v}s`)}</div>
+    <button class="toggle ${S.settings.reveal_role_on_death ? 'on' : ''}" ${host ? 'data-do="reveal"' : 'disabled'}>
+      <span>Lật vai người chết</span><i></i></button>
+
+    <div style="margin-top:24px">
+    ${host ? `<button class="btn primary" data-do="start" ${problem ? 'disabled' : ''}>Bắt đầu ván</button>`
+           : `<p class="muted" style="text-align:center">Chờ chủ phòng bắt đầu…</p>`}
+      <button class="btn" data-do="leave">Rời phòng</button></div>`;
+}
+
+function renderGame(){
+  const ph = S.phase, night = ph.startsWith('night');
+  document.body.className = night ? 'night' : 'day';
+  const a = S.action;
+  const timerLabel = S.deadline ? `<span class="timer js-timer"></span>` : '';
+  app.innerHTML = `
+    <div class="bar"><div><h2>${PHASE[ph]}</h2><span class="meta">${night ? 'Đêm' : 'Ngày'} ${S.day}</span></div>${timerLabel}</div>
+    ${!S.me.alive && !a ? `<div class="dead-banner">💀 Bạn đã chết. Hãy giữ im lặng, không ra hiệu cho ai.</div>` : ''}
+    ${a ? renderAction(a) : renderPassive()}
+    <details class="log"><summary>Nhật ký ván chơi</summary>
+      ${S.log.slice().reverse().map(l => `<p>${esc(l.text)}</p>`).join('')}</details>
+    <button class="role-btn" id="roleBtn">Giữ để xem vai của bạn</button>
+    ${renderReveal()}`;
+}
+
+function renderPassive(){
+  const ph = S.phase, last = S.log.length ? S.log[S.log.length - 1].text : '';
+  if (ph.startsWith('night')) return `
+    <div class="stage"><div class="big">🌙</div><h2>Hãy nhắm mắt</h2>
+      <p>${PHASE[ph]}. Đặt điện thoại úp xuống, đừng nhìn người khác.</p></div>`;
+  if (ph === 'dawn' || ph === 'verdict') {
+    const recent = S.log.slice(-3).filter(l => !l.text.startsWith('🌙')).map(l => esc(l.text)).join('<br>');
+    return `<div class="headline">${recent || esc(last)}</div>`;
+  }
+  if (ph === 'hunter_shot') return `
+    <div class="stage"><div class="big">🏹</div><h2>${esc(P(S.hunter).name)} đang ngắm</h2>
+      <p>Thợ săn được chọn một người để bắn theo.</p></div>`;
+  if (ph === 'day_discuss') return `
+    <div class="stage" style="padding-top:4vh"><div class="big">☀️</div><h2>Cả làng thảo luận</h2>
+      <p>Ai đáng ngờ? Nói ra lập luận của bạn trước khi bỏ phiếu.</p></div>
+    ${board()}
+    ${S.me.is_host ? `<div style="margin-top:18px"><button class="btn" data-do="skipdisc">Mọi người đã sẵn sàng – bỏ phiếu ngay</button></div>` : ''}`;
+  if (ph === 'day_vote') return `<div class="panel"><h2>Đang bỏ phiếu</h2><p>Kết quả hiện ngay khi có phiếu.</p></div>${tally()}`;
+  return '';
+}
+
+function board(){
+  return `<div class="grid">${S.players.map(p => `<div class="pcard ${p.alive ? '' : 'dead'}">
+    <span class="av">${esc(initials(p.name))}</span><span class="pn">${esc(p.name)}</span>
+    ${p.role && !p.alive ? `<span class="who">${ROLE[p.role].name}</span>` : ''}</div>`).join('')}</div>`;
+}
+
+function tally(){
+  const c = {};
+  Object.values(S.votes).forEach(t => c[t] = (c[t] || 0) + 1);
+  const rows = Object.entries(c).sort((a, b) => b[1] - a[1]);
+  if (!rows.length) return '';
+  return `<div class="tally">${rows.map(([t, n]) => `<div><span>${t === 'skip' ? 'Phiếu trắng' : esc(P(t).name)}</span><b>${n}</b></div>`).join('')}</div>`;
+}
+
+function grid(ids, chosen, extra){
+  const sel = pick ?? chosen;
+  return `<div class="grid">${ids.map(id => `<button class="pcard ${sel === id ? 'sel' : ''}" data-pick="${id}">
+    <span class="av">${esc(initials(P(id).name))}</span><span class="pn">${esc(P(id).name)}</span>${extra ? extra(id) : ''}</button>`).join('')}</div>`;
+}
+
+function confirmBar(label, danger){
+  if (!pick) return '';
+  document.body.classList.add('has-confirm');
+  return `<div class="confirm"><button class="btn ${danger ? 'danger' : 'primary'}" data-do="confirm">${label} ${esc(P(pick).name)}</button></div>`;
+}
+
+function renderAction(a){
+  switch (a.kind){
+    case 'guard': return `<div class="panel"><h2>🛡️ Bảo vệ ai đêm nay?</h2>
+      <p>${a.last ? `Đêm qua bạn đã bảo vệ ${esc(P(a.last).name)}, đêm nay phải chọn người khác.` : 'Có thể chọn cả chính bạn.'}</p>
+      ${grid(a.targets)}${confirmBar('Bảo vệ', false)}</div>`;
+
+    case 'wolf_vote': {
+      const by = id => Object.entries(a.team_votes).filter(([, t]) => t === id).map(([w]) => P(w).name);
+      return `<div class="panel"><h2>🐺 Chọn con mồi</h2>
+        <p>Cả bầy cần chọn cùng một người. Hết giờ sẽ theo số đông.</p>
+        ${grid(a.targets, a.chosen, id => by(id).length ? `<span class="badge">${by(id).length}</span><span class="who">${esc(by(id).join(', '))}</span>` : '')}
+        ${pick && pick !== a.chosen ? confirmBar('Cắn', true) : ''}</div>`;
+    }
+    case 'seer_check': return a.result
+      ? `<div class="panel"><h2>🔮 Lời tiên tri</h2><div class="result">${esc(a.result)}</div>
+         <button class="btn primary" data-do="seer_ack">Đã ghi nhớ, nhắm mắt</button></div>`
+      : `<div class="panel"><h2>🔮 Soi ai đêm nay?</h2><p>Bạn sẽ biết người đó có phải sói không.</p>
+         ${grid(a.targets)}${confirmBar('Soi', false)}</div>`;
+
+    case 'witch': return `<div class="panel"><h2>🧪 Phù thủy</h2><p>Dùng bình nào cũng được, hoặc cất đi.</p>
+      <div class="potion"><h3>Bình cứu ${a.heal_left ? '' : '(đã dùng)'}</h3>
+        ${a.healed ? `<p>Bạn đã cứu ${esc(P(a.victim).name)} ✓</p>`
+          : !a.heal_left ? '<p>Bạn không còn bình cứu.</p>'
+          : a.victim ? `<p>Đêm nay sói cắn <b>${esc(P(a.victim).name)}</b>.</p><button class="btn primary" data-do="heal">Cứu ${esc(P(a.victim).name)}</button>`
+          : '<p>Đêm nay sói không cắn ai.</p>'}</div>
+      <div class="potion"><h3>Bình độc ${a.poison_left ? '' : '(đã dùng)'}</h3>
+        ${a.poisoned ? `<p>Bạn đã đầu độc ${esc(P(a.poisoned).name)}.</p>`
+          : a.poison_left ? `<p>Chạm vào một người để đầu độc.</p>${grid(a.targets)}` : '<p>Bạn không còn bình độc.</p>'}</div>
+      ${pick ? confirmBar('Đầu độc', true) : `<button class="btn" data-do="witch_done">Xong, nhắm mắt</button>`}</div>`;
+
+    case 'vote': {
+      const c = {}; Object.values(S.votes).forEach(t => c[t] = (c[t] || 0) + 1);
+      return `<div class="panel"><h2>⚖️ Treo cổ ai?</h2>
+        <p>${a.chosen ? `Bạn đang chọn ${a.chosen === 'skip' ? 'phiếu trắng' : esc(P(a.chosen).name)}. Có thể đổi trước khi hết giờ.` : 'Chọn người bạn nghi là sói.'}</p>
+        ${grid(a.targets, a.chosen === 'skip' ? null : a.chosen, id => c[id] ? `<span class="badge">${c[id]}</span>` : '')}
+        <div style="margin-top:14px"><button class="btn" data-do="vote_skip">Bỏ phiếu trắng${c.skip ? ` (${c.skip})` : ''}</button></div>
+        ${pick && pick !== a.chosen ? confirmBar('Bỏ phiếu cho', false) : ''}</div>`;
+    }
+    case 'hunter': return `<div class="panel"><h2>🏹 Phát súng cuối</h2><p>Bạn đã chết. Chọn một người để bắn theo.</p>
+      ${grid(a.targets)}<div style="margin-top:14px"><button class="btn" data-do="hunter_skip">Không bắn</button></div>
+      ${confirmBar('Bắn', true)}</div>`;
+  }
+  return '';
+}
+
+function renderReveal(){
+  const R = ROLE[S.me.role]; if (!R) return '';
+  return `<div class="reveal ${revealing ? 'show' : ''}" id="reveal">
+    <div class="big">${R.icon}</div><h2>${R.name}</h2>
+    <div class="team ${R.team === 'wolf' ? 't-wolf' : 't-village'}">${R.team === 'wolf' ? 'Phe Sói' : 'Phe Dân làng'}</div>
+    <p class="muted" style="max-width:30ch;margin-bottom:16px">${R.desc}</p>
+    <ul>${S.private.slice(1).map(t => `<li>${esc(t)}</li>`).join('')}</ul></div>`;
+}
+
+function renderEnd(){
+  document.body.className = 'day';
+  const wolves = S.winner === 'wolves';
+  app.innerHTML = `
+    <div class="win"><div class="big">${wolves ? '🐺' : '🏡'}</div>
+      <h2 class="${wolves ? 't-wolf' : 't-village'}">${wolves ? 'Bầy sói thắng' : 'Dân làng thắng'}</h2>
+      <p class="muted">Sau ${S.day} đêm</p></div>
+    <div class="roster">${S.players.map(p => `<div class="${p.alive ? '' : 'dead'}">
+      <span>${esc(p.name)}${p.id === S.me.id ? ' (bạn)' : ''}</span>
+      <span>${ROLE[p.role]?.icon || ''} ${ROLE[p.role]?.name || ''}</span></div>`).join('')}</div>
+    <div style="margin-top:24px">
+      ${S.me.is_host ? '<button class="btn primary" data-do="restart">Chơi ván mới</button>' : '<p class="muted" style="text-align:center">Chờ chủ phòng mở ván mới…</p>'}
+      <button class="btn" data-do="leave">Rời phòng</button></div>
+    <details class="log"><summary>Nhật ký ván chơi</summary>${S.log.map(l => `<p>${esc(l.text)}</p>`).join('')}</details>`;
+}
+
+/* ---------------- đồng hồ ---------------- */
+function tick(){
+  if (!S || !S.deadline) return;
+  const s = Math.max(0, Math.ceil((S.deadline * 1000 - (Date.now() + clockOffset)) / 1000));
+  document.querySelectorAll('.js-timer').forEach(el => {
+    el.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+    el.classList.toggle('urgent', s <= 10);
+  });
+}
+setInterval(tick, 250);
+
+/* ---------------- tương tác ---------------- */
+app.addEventListener('click', async e => {
+  const b = e.target.closest('button, [data-do]'); if (!b || b.disabled) return;
+
+  if (b.dataset.pick){ pick = pick === b.dataset.pick ? null : b.dataset.pick; render(); return; }
+  if (b.dataset.role){
+    const roles = {...S.settings.roles}, k = b.dataset.role;
+    roles[k] = Math.max(0, Math.min(SINGLE.has(k) ? 1 : 30, (roles[k] || 0) + Number(b.dataset.d)));
+    send({type:'settings', settings:{roles}}); return;
+  }
+  if (b.dataset.set){ send({type:'settings', settings:{[b.dataset.set]: Number(b.dataset.v)}}); return; }
+
+  const name = () => { const v = $('#name').value.trim(); if (!v) throw new Error('Hãy nhập tên của bạn'); save('masoi_name', v); return v; };
+  try {
+    switch (b.dataset.do){
+      case 'create': session = await api('/api/rooms', {name:name()}); break;
+      case 'join': {
+        const code = $('#code').value.trim().toUpperCase();
+        if (code.length !== 4) throw new Error('Mã phòng gồm 4 chữ cái');
+        session = await api(`/api/rooms/${code}/join`, {name:name()}); break;
+      }
+      case 'share': {
+        const url = invite?.url || `${location.origin}/?room=${S.code}`;
+        // Trên http:// (mạng LAN) trình duyệt thường tắt share/clipboard
+        if (navigator.share) await navigator.share({title:'Vào chơi Ma Sói', text:`Mã phòng ${S.code}`, url}).catch(() => {});
+        else if (navigator.clipboard) { await navigator.clipboard.writeText(url); toast('Đã sao chép link mời'); }
+        else toast(`Gửi link này cho mọi người: ${url}`);
+        return;
+      }
+      case 'qrbig': qrFull = true; render(); return;
+      case 'qrclose': qrFull = false; render(); return;
+      case 'nextip': await loadInvite((invite.index + 1) % invite.count); toast('Đã đổi sang địa chỉ khác, thử quét lại'); return;
+      case 'nolink': history.replaceState(null, '', '/'); render(); return;
+      case 'auto': send({type:'settings', settings:{auto_roles:true}}); return;
+      case 'reveal': send({type:'settings', settings:{reveal_role_on_death: !S.settings.reveal_role_on_death}}); return;
+      case 'start': send({type:'start'}); return;
+      case 'restart': send({type:'restart'}); return;
+      case 'leave':
+        if (S && S.phase === 'lobby') send({type:'leave'});
+        session = null; S = null; save('masoi_session', null); ws?.close(); render(); return;
+      case 'skipdisc': act('skip_discussion'); return;
+      case 'seer_ack': act('seer_ack'); return;
+      case 'heal': act('witch_heal'); return;
+      case 'witch_done': act('witch_done'); return;
+      case 'vote_skip': pick = null; act('vote', 'skip'); return;
+      case 'hunter_skip': act('hunter_skip'); return;
+      case 'confirm': {
+        const map = {guard:'guard', wolf_vote:'wolf_vote', seer_check:'seer_check', witch:'witch_poison', vote:'vote', hunter:'hunter_shoot'};
+        act(map[S.action.kind], pick); pick = null; return;
+      }
+      default: return;
+    }
+    save('masoi_session', session); history.replaceState(null, '', '/'); connect();
+  } catch (err) { toast(err.message); }
+});
+
+/* Giữ nút để xem vai – thả tay là che đi, an toàn khi ngồi cạnh nhau */
+document.addEventListener('pointerdown', e => {
+  if (e.target.closest('#roleBtn')){ e.preventDefault(); revealing = true; $('#reveal')?.classList.add('show'); }
+});
+['pointerup','pointercancel','blur'].forEach(ev => window.addEventListener(ev, () => {
+  if (revealing){ revealing = false; $('#reveal')?.classList.remove('show'); }
+}));
+document.addEventListener('contextmenu', e => { if (e.target.closest('#roleBtn')) e.preventDefault(); });
+
+if (session) connect(); render();
+</script>
+</body>
+</html>
