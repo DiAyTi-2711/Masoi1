@@ -328,7 +328,7 @@ function stopSpeech(){
 let prevPhase = null;
 function onState(){
   // Chơi ván mới / về phòng chờ: dừng ngay phần đọc diễn biến ván cũ
-  if (prevPhase === 'ended' && S.phase !== 'ended') stopSpeech();
+  if ((prevPhase === 'ended' && S.phase !== 'ended') || (prevPhase && prevPhase !== 'lobby' && S.phase === 'lobby')) stopSpeech();
   prevPhase = S.phase;
   if (S.me.narrator || (S.me.is_host && S.settings.host_voice)) queueSpeech(S.speech);
   if (pendingBots && S.phase === 'lobby' && S.me.is_host){
@@ -366,12 +366,13 @@ const SCRIPT_GROUPS = [
     ['hunter_call', 'Gọi Thợ Săn', ['ten']], ['hunter_shot', 'Thợ Săn bắn', ['ten']], ['hunter_skip', 'Thợ Săn không bắn']]],
   ['Ban ngày', [['discuss', 'Bắt đầu thảo luận', ['thoi_gian']], ['ready', 'Đa số bấm Vote ngay'],
     ['host_skip', 'Quản trò cho bỏ phiếu ngay'], ['vote', 'Bắt đầu bỏ phiếu'],
-    ['lynch', 'Có người bị treo cổ', ['ten', 'so_phieu']], ['no_lynch', 'Không ai bị treo cổ']]],
-  ['Kết thúc', [['end', 'Công bố phe thắng', ['phe_thang']], ['thanks', 'Lời chào cuối']]],
+    ['lynch', 'Có người bị treo cổ', ['ten', 'so_phieu']], ['no_lynch', 'Không ai bị treo cổ'],
+    ['vote_detail', 'Công khai phiếu (khi bật hiển thị ai vote ai)', ['ten', 'so_phieu', 'nguoi_bo_phieu']]]],
+  ['Kết thúc', [['end', 'Công bố phe thắng', ['phe_thang']], ['thanks', 'Lời chào cuối'], ['cancel', 'Huỷ ván']]],
 ];
 const PH_LABEL = {dem:'số đêm', vai:'tên vai', nguoi_chet:'tên người chết', ten:'tên người', so_phieu:'số phiếu',
-  thoi_gian:'thời gian', phe_thang:'phe thắng'};
-const SAMPLE = {dem:1, vai:'Bảo Vệ', nguoi_chet:'An và Bình', ten:'An', so_phieu:5, thoi_gian:'3 phút', phe_thang:'Phe Dân Làng'};
+  thoi_gian:'thời gian', phe_thang:'phe thắng', nguoi_bo_phieu:'người bỏ phiếu'};
+const SAMPLE = {dem:1, vai:'Bảo Vệ', nguoi_chet:'An và Bình', ten:'An', so_phieu:5, thoi_gian:'3 phút', phe_thang:'Phe Dân Làng', nguoi_bo_phieu:'Bình, Chi và Dũng'};
 let editorOpen = false, pendingRender = false, scriptsSynced = false, saveTimer = null;
 const fillSample = t => t.replace(/\{(\w+)\}/g, (m, k) => k in SAMPLE ? SAMPLE[k] : m);
 const scriptText = key => S.settings.scripts?.[key] || S.script_defaults?.[key] || '';
@@ -508,9 +509,44 @@ async function loadInvite(i = 0){
   } catch {}
 }
 
+function playerChips(){
+  const ready = S.next_ready?.ids || [];
+  return `<div class="chips">${S.players.map(p => `<span class="chip ${p.connected ? '' : 'off'}">
+    ${p.is_host ? '<span class="host">★</span> ' : ''}${ready.includes(p.id) ? '✓ ' : ''}${esc(p.name)}${p.id === S.me.id ? ' (bạn)' : ''}</span>`).join('')}</div>`;
+}
+
+function qrOverlay(){
+  return qrFull && invite ? `<div class="qr-full" data-do="qrclose" role="dialog">
+    <div class="qr">${invite.svg}</div><b>${S.code}</b>
+    <p>Mở camera điện thoại và quét để vào phòng.</p><p style="opacity:.6">Chạm để đóng</p></div>` : '';
+}
+
+/* Phòng chờ của người chơi: không thấy cấu hình vai – chỉ mã phòng, người chơi cùng, sẵn sàng, rời phòng */
+function renderPlayerLobby(){
+  const r = S.next_ready || {count:0, total:0, me:false, ids:[]};
+  const ok = invite?.code === S.code;
+  app.innerHTML = `
+    <div class="bar"><h2>Phòng chờ</h2><span class="meta">${S.players.length} người</span></div>
+    <div class="invite">
+      <button class="qr" data-do="qrbig" aria-label="Phóng to mã QR">${ok ? invite.svg : ''}</button>
+      <div class="info"><small>Mã phòng</small><b>${S.code}</b>
+        <div class="url">${ok ? esc(invite.url) : 'Đang lấy địa chỉ…'}</div>
+        <div class="links"><button data-do="copy">📋 Sao chép</button><button data-do="share">📤 Chia sẻ</button>
+          <button data-do="qrbig">Phóng to</button></div></div></div>
+    ${qrOverlay()}
+    ${S.narrator ? `<p class="muted" style="margin-top:12px">🎙️ Quản trò: ${esc(S.narrator.name)}${S.narrator.connected ? '' : ' (mất kết nối)'}</p>` : ''}
+    <div class="section"><h3>Người chơi cùng phòng</h3><span class="meta">${r.count}/${r.total} sẵn sàng</span></div>
+    ${playerChips()}
+    <div style="margin-top:24px">
+      <button class="btn ${r.me ? '' : 'primary'}" data-do="ready_next">${r.me ? '✓ Đã sẵn sàng (bấm để huỷ)' : '✋ Sẵn sàng'}</button>
+      <p class="muted" style="text-align:center;margin:8px 0 4px;font-size:14px">Chủ phòng sẽ bắt đầu ván. Các vai trong ván được giữ bí mật.</p>
+      <button class="btn" data-do="leave">Rời phòng</button></div>`;
+}
+
 function renderLobby(){
   document.body.className = 'night';
   if (!invite || invite.code !== S.code){ if (!loadInvite.busy){ loadInvite.busy = true; loadInvite().finally(() => loadInvite.busy = false); } }
+  if (!S.me.is_host){ renderPlayerLobby(); return; }
   const host = S.me.is_host, n = S.players.length, r = S.settings.roles;
   const creator = (r.creator || 0) > 0, need = n + (creator ? S.limits.creator_extra : 0);
   const total = Object.values(r).reduce((x, y) => x + y, 0), specials = total - (r.villager || 0);
@@ -561,9 +597,8 @@ function renderLobby(){
           <span>🔊 Máy tôi đọc lời quản trò (khi không có máy quản trò riêng)</span><i></i></button>
           ${S.settings.host_voice ? audioPanel() + scriptEditor() : ''}` : ''}
     ${S.narrator ? `<p class="muted" style="margin-top:12px">🎙️ Quản trò: ${esc(S.narrator.name)}${S.narrator.connected ? '' : ' (mất kết nối)'}</p>` : ''}
-    <div class="section"><h3>Người chơi</h3></div>
-    <div class="chips">${S.players.map(p => `<span class="chip ${p.connected ? '' : 'off'}">
-      ${p.is_host ? '<span class="host">★</span> ' : ''}${esc(p.name)}${p.id === S.me.id ? ' (bạn)' : ''}</span>`).join('')}</div>
+    <div class="section"><h3>Người chơi</h3><span class="meta">✓ ${S.next_ready?.count || 0}/${S.next_ready?.total || 0} người thật sẵn sàng</span></div>
+    ${playerChips()}
 
     <div class="section"><h3>Vai trong ván</h3><span class="meta">${S.roles_custom ? 'Tự chọn' : 'Tự động theo số người'}</span></div>
     ${host ? `<div class="presets"><button data-do="auto">Gợi ý theo số người</button>
@@ -581,6 +616,7 @@ function renderLobby(){
       <span>Lật vai người chết</span><i></i></button>
     <button class="toggle ${S.settings.fast_turns ? 'on' : ''}" ${host ? 'data-do="fast"' : 'disabled'}>
       <span>Chọn xong là sang lượt tiếp (tiết kiệm thời gian)</span><i></i></button>
+    ${voteToggle()}
 
     <div style="margin-top:24px">
     ${host ? `<button class="btn primary" data-do="start" ${problem ? 'disabled' : ''}>Bắt đầu ván</button>`
@@ -599,8 +635,12 @@ function renderGame(){
     ${S.me.alive && S.silenced === S.me.id && !night ? `<div class="dead-banner">🤐 Bạn bị phù phép – không được nói trong buổi thảo luận hôm nay. Vẫn được bỏ phiếu.</div>` : ''}
     ${S.me.is_host && S.settings.host_voice && !audioReady ? `<button class="btn primary" data-do="unlock" style="margin-bottom:14px">🔊 Chạm để bật giọng quản trò</button>` : ''}
     ${a ? renderAction(a) : renderPassive()}
-    <details class="log"><summary>Nhật ký ván chơi</summary>
-      ${S.log.slice().reverse().map(l => `<p>${esc(l.text)}</p>`).join('')}</details>
+    <details class="log"><summary>Diễn biến của bạn</summary>
+      <p class="muted" style="font-size:13px;margin-top:6px">Việc bạn đã làm</p>
+      ${S.private.slice(1).reverse().map(t => `<p>${esc(t)}</p>`).join('') || '<p class="muted">Chưa có.</p>'}
+      <p class="muted" style="font-size:13px;margin-top:14px">Trong làng: ai chết, ai bị treo cổ, ai bị câm</p>
+      ${S.log.slice().reverse().map(l => `<p>${esc(l.text)}</p>`).join('') || '<p class="muted">Chưa có.</p>'}</details>
+    ${S.me.is_host ? `<div style="margin-top:18px">${voteToggle()}<button class="btn" data-do="cancel_game" style="margin-top:10px">⛔ Huỷ ván (chủ phòng)</button></div>` : ''}
     <button class="role-btn" id="roleBtn">Giữ để xem vai của bạn</button>
     ${renderReveal()}`;
 }
@@ -633,9 +673,7 @@ function renderPassive(){
 }
 
 function chatter(){
-  let start = 0;
-  S.log.forEach((l, k) => { if (l.text.startsWith('☀️')) start = k; });
-  const lines = S.log.slice(Math.max(0, start)).filter(l => l.text.startsWith('💬')).slice(-5);
+  const lines = (S.chat || []).slice(-5);
   return lines.length ? `<div class="potion" style="margin-bottom:16px"><h3>Máy chơi đang nói</h3>
     ${lines.map(l => `<p style="margin:6px 0;color:var(--bone)">${esc(l.text.replace('💬 ', ''))}</p>`).join('')}</div>` : '';
 }
@@ -652,10 +690,18 @@ function voteCounts(){
   return c;
 }
 
+function voteToggle(){
+  if (!S.me.is_host) return '';
+  return `<button class="toggle ${S.settings.show_votes ? 'on' : ''}" data-do="show_votes">
+    <span>Công khai ai bỏ phiếu cho ai${S.settings.show_votes ? '' : ' (đang phiếu kín)'}</span><i></i></button>`;
+}
+const votersOf = id => Object.entries(S.votes).filter(([v, t]) => t === id && !v.startsWith('#')).map(([v]) => P(v).name.replace('🤖 ', ''));
+
 function tally(){
   const rows = Object.entries(voteCounts()).sort((a, b) => b[1] - a[1]);
   if (!rows.length) return '';
-  return `<div class="tally">${rows.map(([t, n]) => `<div><span>${t === 'skip' ? 'Phiếu trắng' : esc(P(t).name)}</span><b>${n}</b></div>`).join('')}</div>`;
+  return `<div class="tally">${rows.map(([t, n]) => `<div><span>${t === 'skip' ? 'Phiếu trắng' : esc(P(t).name)}
+    ${S.settings.show_votes ? `<small style="display:block">${esc(votersOf(t).join(', '))}</small>` : ''}</span><b>${n}</b></div>`).join('')}</div>`;
 }
 
 function grid(ids, chosen = [], extra){
@@ -700,8 +746,10 @@ function renderAction(a){
   if (a.kind === 'vote') {
     const c = voteCounts();
     desc = a.chosen ? `Bạn đang chọn ${a.chosen === 'skip' ? 'phiếu trắng' : esc(P(a.chosen).name)}. Có thể đổi trước khi hết giờ.` : 'Chọn người bạn nghi là sói.';
-    extra = id => c[id] ? `<span class="badge">${c[id]}</span>` : '';
-    bottom = `<div style="margin-top:14px"><button class="btn" data-do="vote_skip">Bỏ phiếu trắng${c.skip ? ` (${c.skip})` : ''}</button></div>`;
+    extra = id => (c[id] ? `<span class="badge">${c[id]}</span>` : '')
+      + (S.settings.show_votes && votersOf(id).length ? `<span class="who">${esc(votersOf(id).join(', '))}</span>` : '');
+    bottom = `<div style="margin-top:14px"><button class="btn" data-do="vote_skip">Bỏ phiếu trắng${c.skip ? ` (${c.skip})` : ''}</button></div>
+      <p class="muted" style="font-size:13px;text-align:center;margin-top:8px">${S.settings.show_votes ? 'Phiếu công khai: mọi người thấy ai bầu ai.' : 'Phiếu kín: chỉ hiện số phiếu.'}</p>`;
   }
   if (a.kind === 'hunter') bottom = `<div style="margin-top:14px"><button class="btn" data-ack="hunter_skip">Không bắn</button></div>`;
   return `<div class="panel"><h2>${K.t}</h2><p>${desc}</p>${grid(a.targets, chosen, extra)}${bottom}${confirmBar(a, K)}</div>`;
@@ -749,15 +797,27 @@ function renderEnd(){
     <div class="win"><div class="big">${wolves ? '🐺' : '🏡'}</div>
       <h2 class="${wolves ? 't-wolf' : 't-village'}">${wolves ? 'Phe Ma Sói thắng' : 'Phe Dân Làng thắng'}</h2>
       <p class="muted">Sau ${S.day} đêm</p></div>
+    ${nextPanel()}
+    <div class="section"><h3>Người chơi và vai trò</h3><span class="meta">${S.players.filter(p => p.alive).length} người sống sót</span></div>
     <div class="roster">${S.players.map(p => `<div class="${p.alive ? '' : 'dead'}">
-      <span>${esc(p.name)}${p.id === S.me.id ? ' (bạn)' : ''}</span>
+      <span>${p.alive ? '🙂' : '💀'} ${esc(p.name)}${p.id === S.me.id ? ' (bạn)' : ''}</span>
       <span>${ROLE[p.role]?.icon || ''} ${ROLE[p.role]?.name || ''}</span></div>`).join('')}</div>
-    <div style="margin-top:24px">
-      ${S.me.is_host ? '<button class="btn primary" data-do="restart">Chơi ván mới</button>' : '<p class="muted" style="text-align:center">Chờ chủ phòng mở ván mới…</p>'}
-      <button class="btn" data-do="leave">Rời phòng</button></div>
     ${recapHtml()}
     ${S.me.narrator ? `<div class="narr-tools"><button class="btn" data-do="replay_recap">🔊 Đọc lại diễn biến</button>
       <button class="btn" data-do="mute">${muted ? '🔈 Bật tiếng' : '🔇 Tắt tiếng'}</button></div>` : ''}`;
+}
+
+function nextPanel(){
+  const r = S.next_ready || {count:0, total:0, me:false};
+  const status = `<p class="muted" style="text-align:center;margin-top:8px;font-size:14px">✓ ${r.count}/${r.total} người thật sẵn sàng chơi tiếp</p>`;
+  if (S.me.is_host) return `<div style="margin-top:8px">
+      <button class="btn primary" data-do="new_game">▶ Bắt đầu ván mới</button>${status}
+      <button class="btn" data-do="restart">⚙️ Về phòng chờ để đổi vai</button>
+      ${S.me.narrator ? '' : '<button class="btn" data-do="leave">Rời phòng</button>'}</div>`;
+  return `<div style="margin-top:8px">
+      <button class="btn ${r.me ? '' : 'primary'}" data-do="ready_next">${r.me ? '✓ Đã sẵn sàng (bấm để huỷ)' : '✋ Sẵn sàng chơi tiếp'}</button>${status}
+      <p class="muted" style="text-align:center;font-size:14px">Khi chủ phòng bấm bắt đầu, điện thoại của bạn tự vào ván mới.</p>
+      <button class="btn" data-do="leave">Rời phòng</button></div>`;
 }
 
 function recapHtml(){
@@ -788,6 +848,8 @@ function renderNarrator(){
     ${ph === 'day_discuss' ? `<div style="margin-top:12px"><button class="btn primary" data-do="skipdisc">🗳️ Vote ngay</button>
       <p class="muted" style="text-align:center;margin-top:8px;font-size:14px">${S.ready.count}/${S.ready.need} người chơi đã bấm Vote ngay</p></div>` : ''}
     ${ph === 'day_vote' ? tally() : ''}
+    ${voteToggle()}
+    <button class="btn" data-do="cancel_game" style="margin-top:10px">⛔ Huỷ ván</button>
     ${scriptEditor()}
     <details class="log"><summary>Nhật ký công khai</summary>
       ${S.log.slice().reverse().map(l => `<p>${esc(l.text)}</p>`).join('')}</details>
@@ -912,6 +974,13 @@ app.addEventListener('click', async e => {
         if (code.length !== 4) throw new Error('Mã phòng gồm 4 chữ cái');
         session = await api(`/api/rooms/${code}/join`, {name:name()}); break;
       }
+      case 'copy': {
+        const url = invite?.url || `${location.origin}/?room=${S.code}`;
+        const text = `Vào chơi Ma Sói – mã phòng ${S.code}: ${url}`;
+        try { await navigator.clipboard.writeText(text); toast('✓ Đã sao chép mã phòng và link'); }
+        catch { toast(text); }
+        return;
+      }
       case 'share': {
         const url = invite?.url || `${location.origin}/?room=${S.code}`;
         // Trên http:// (mạng LAN) trình duyệt thường tắt share/clipboard
@@ -936,9 +1005,15 @@ app.addEventListener('click', async e => {
       case 'fast': send({type:'settings', settings:{fast_turns: !S.settings.fast_turns}}); return;
       case 'start': send({type:'start'}); return;
       case 'restart': stopSpeech(); send({type:'restart'}); return;
+      case 'new_game': stopSpeech(); send({type:'new_game'}); return;
+      case 'show_votes': send({type:'settings', settings:{show_votes: !S.settings.show_votes}}); return;
+      case 'cancel_game':
+        if (confirm('Huỷ ván đang chơi? Mọi người sẽ quay lại phòng chờ.')) send({type:'cancel_game'});
+        return;
+      case 'ready_next': send({type:'ready_next'}); return;
       case 'leave':
         stopSpeech();
-        if (S && S.phase === 'lobby') send({type:'leave'});
+        if (S && (S.phase === 'lobby' || S.phase === 'ended')) send({type:'leave'});
         session = null; S = null; save('masoi_session', null); ws?.close(); render(); return;
       case 'skipdisc': act('skip_discussion'); return;
       case 'vote_skip': picks = []; act('vote', 'skip'); return;

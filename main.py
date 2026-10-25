@@ -187,6 +187,10 @@ async def dispatch(room: Room, pid: str, ws: WebSocket, msg: dict) -> None:
     if kind == "ping":
         await ws.send_json({"type": "pong"})
         return
+    if kind == "ready_next":
+        room.toggle_next_ready(pid)
+        await broadcast(room)
+        return
     if kind == "leave":
         room.remove_player(pid)
         await ws.close()
@@ -213,6 +217,10 @@ async def dispatch(room: Room, pid: str, ws: WebSocket, msg: dict) -> None:
             raise GameError("Lệnh máy chơi không hợp lệ")
     elif kind == "restart":
         room.reset_to_lobby()
+    elif kind == "cancel_game":
+        room.cancel_game()
+    elif kind == "new_game":
+        await room.new_game()
     elif kind == "kick":
         room.remove_player(str(msg.get("target")))
         old = connections.get(room.code, {}).pop(str(msg.get("target")), None)

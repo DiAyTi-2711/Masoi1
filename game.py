@@ -120,6 +120,8 @@ SCRIPT_DEFAULTS: dict[str, str] = {
     "no_lynch": "Số phiếu không đủ. Hôm nay không ai bị treo cổ.",
     "end": "Ván chơi kết thúc. {phe_thang} chiến thắng! Sau đây là diễn biến của ván chơi.",
     "thanks": "Cảm ơn mọi người đã chơi.",
+    "vote_detail": "{ten} có {so_phieu} phiếu từ {nguoi_bo_phieu}.",
+    "cancel": "Quản trò đã huỷ ván chơi. Mọi người quay lại phòng chờ.",
 }
 SCRIPT_MAX = 300
 BOT_NAMES = ["Na", "Bi", "Tôm", "Mít", "Su", "Bống", "Cốm", "Kem", "Xoài", "Đậu", "Gạo", "Mận", "Bơ", "Nho",
@@ -181,6 +183,7 @@ class Settings:
     reveal_role_on_death: bool = True
     fast_turns: bool = True
     host_voice: bool = False     # chủ phòng (đang chơi) cũng đọc lời quản trò trên máy mình
+    show_votes: bool = False     # công khai ai bỏ phiếu cho ai (mặc định: phiếu kín, chỉ thấy số phiếu)
     scripts: dict[str, str] = field(default_factory=dict)  # lời quản trò đã sửa      # chọn xong là kết thúc lượt, không chờ hết giờ
 
 
@@ -233,6 +236,8 @@ class Room:
         self.frozen_next: str | None = None
         self.silenced: str | None = None
         self.ready_vote: set[str] = set()
+        self.next_ready: set[str] = set()
+        self._day_log_start = 0  # ai đã bấm "Sẵn sàng chơi tiếp" khi hết ván
         self._step_id = 0
         self.bot_mem: dict[str, dict] = {}      # trí nhớ riêng của từng máy chơi
         self.public_claims: dict[str, bool] = {}  # Tiên Tri máy đã công khai: id -> là sói?
@@ -276,7 +281,7 @@ class Room:
         return p
 
     def remove_player(self, pid: str) -> None:
-        if self.phase != Phase.LOBBY:
+        if self.phase not in (Phase.LOBBY, Phase.ENDED):
             raise GameError("Không thể rời khi ván đang diễn ra")
         p = self.players.pop(pid, None)
         if p and p.is_host:
@@ -340,8 +345,11 @@ class Room:
     def update_settings(self, data: dict) -> None:
         if "scripts" in data:
             self.update_scripts(data["scripts"])
-            if len(data) == 1:
-                return
+        if "show_votes" in data:  # bật/tắt được cả khi đang chơi
+            self.settings.show_votes = bool(data["show_votes"])
+        data = {k: v for k, v in data.items() if k not in ("scripts", "show_votes")}
+        if not data:
+            return
         if self.phase != Phase.LOBBY:
             raise GameError("Chỉ đổi cấu hình được ở phòng chờ")
         try:
@@ -413,6 +421,33 @@ class Room:
             p.role, p.alive, p.private_log = None, True, []
         self._auto_roles()
 
+    def toggle_next_ready(self, pid: str) -> None:
+        p = self.players.get(pid)
+        if self.phase not in (Phase.LOBBY, Phase.ENDED) or not p or p.narrator or p.bot:
+            raise GameError("Chỉ bấm được ở phòng chờ hoặc khi ván đã kết thúc")
+        self.next_ready ^= {pid}
+
+    def cancel_game(self) -> None:
+        """Quản trò huỷ ván đang chơi: mọi người về phòng chờ, giữ nguyên người chơi và cấu hình."""
+        if self.phase == Phase.LOBBY:
+            raise GameError("Chưa có ván nào đang chơi")
+        if self.task and not self.task.done():
+            self.task.cancel()
+        self.task = None
+        self._reset_game()
+        for p in self.players.values():
+            p.role, p.alive, p.private_log = None, True, []
+        self._auto_roles()
+        self._event("⛔ Quản trò đã huỷ ván.")
+        self._say(self._t("cancel"))
+
+    async def new_game(self) -> None:
+        """Chơi tiếp ngay với cùng người chơi và cấu hình – mọi điện thoại tự vào ván mới."""
+        if self.phase != Phase.ENDED:
+            raise GameError("Ván chưa kết thúc")
+        self.reset_to_lobby()
+        await self.start()  # nếu cấu hình vai không còn hợp lệ: ở lại phòng chờ và báo lỗi
+
     # ------------------------------------------------------------ tiện ích
     def is_wolf(self, p: Player) -> bool:
         """Sói Biến Chủng chỉ thành sói từ đêm thứ 2."""
@@ -426,6 +461,10 @@ class Room:
 
     def wolves(self) -> list[Player]:
         return [p for p in self.alive() if self.is_wolf(p)]
+
+    @staticmethod
+    def _names_list(names: list[str]) -> str:
+        return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " và " + names[-1]
 
     def _names(self, ids) -> str:
         names = [self._name(i) for i in ids]
@@ -757,6 +796,7 @@ class Room:
         length = f"{mins // 60} phút" + (f" {mins % 60} giây" if mins % 60 else "") if mins >= 60 else f"{mins} giây"
         self._say(self._t("discuss", thoi_gian=length))
         self.ready_vote = set()
+        self._day_log_start = len(self.log)
         if not any(not p.bot for p in self.alive()):
             mins = min(mins, 12)  # chỉ còn máy chơi: thảo luận ngắn
         for b in self.alive():
@@ -769,6 +809,14 @@ class Room:
         await self._step(Phase.DAY_VOTE, self.settings.vote_seconds,
                          {p.id for p in self.alive()}, early=True)
         target = self._vote_result()
+        if self.settings.show_votes and self.day_votes:
+            by: dict[str, list[str]] = {}
+            for voter, t in self.day_votes.items():
+                by.setdefault(t, []).append(self._name(voter))
+            for t, names in sorted(by.items(), key=lambda kv: -len(kv[1])):
+                who = "Phiếu trắng" if t == "skip" else self._name(t)
+                self._event(f"📋 {who} ({len(names)}): {', '.join(names)}")
+                self._say(self._t("vote_detail", ten=who, so_phieu=len(names), nguoi_bo_phieu=self._names_list(names)))
         if target:
             n = sum(1 for t in self.day_votes.values() if t == target)
             role = ROLE_VI[self.players[target].role]
@@ -1158,15 +1206,27 @@ class Room:
             "players": [{"id": o.id, "name": o.name, "alive": o.alive, "bot": o.bot,
                          "connected": o.connected, "is_host": o.is_host,
                          "role": visible_role(o)} for o in self.seated()],
-            "settings": asdict(self.settings),
+            # chỉ chủ phòng / máy quản trò biết cấu hình vai
+            "settings": {**asdict(self.settings), "roles": self.settings.roles if me.is_host else {},
+                         "scripts": self.settings.scripts if me.is_host else {}},
             "roles_custom": self.roles_custom,
             "limits": {"min": MIN_PLAYERS, "max": MAX_PLAYERS, "creator_extra": CREATOR_EXTRA},
-            "log": self.log[-40:],
+            # người chơi chỉ thấy: ai chết, ai bị treo, ai bị câm… (không thấy lời bàn / số người bấm Vote ngay)
+            "log": (self.log if me.narrator else
+                    [e for e in self.log if not e["text"].startswith(("💬", "🗳️"))])[-40:],
+            "chat": [e for e in self.log[self._day_log_start:] if e["text"].startswith("💬")][-6:]
+                    if self.phase == Phase.DAY_DISCUSS else [],
             "private": me.private_log[-20:],
             "action": self._action_for(me),
-            "votes": self.day_votes if self.phase in (Phase.DAY_VOTE, Phase.VERDICT) else {},
+            # phiếu kín: người chơi chỉ thấy số phiếu, không biết ai bầu ai
+            "votes": ({} if self.phase not in (Phase.DAY_VOTE, Phase.VERDICT)
+                      else self.day_votes if (self.settings.show_votes or me.narrator)
+                      else {f"#{k}": t for k, t in enumerate(self.day_votes.values())}),
             "hunter": self.hunter_shooter,
             "silenced": self.silenced,
+            "next_ready": {"count": len(self.next_ready), "me": pid in self.next_ready,
+                           "ids": sorted(self.next_ready),
+                           "total": len(self.humans())},
             "ready": {"count": len(self.ready_vote),
                       "need": len([x for x in self.alive() if not x.bot]) // 2 + 1,
                       "me": pid in self.ready_vote},
