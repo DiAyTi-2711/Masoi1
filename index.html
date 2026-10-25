@@ -320,7 +320,16 @@ function connect(){
   };
 }
 
+function stopSpeech(){
+  speakQueue = []; speaking = false; currentLine = '';
+  tts?.cancel();
+}
+
+let prevPhase = null;
 function onState(){
+  // Chơi ván mới / về phòng chờ: dừng ngay phần đọc diễn biến ván cũ
+  if (prevPhase === 'ended' && S.phase !== 'ended') stopSpeech();
+  prevPhase = S.phase;
   if (S.me.narrator || (S.me.is_host && S.settings.host_voice)) queueSpeech(S.speech);
   if (pendingBots && S.phase === 'lobby' && S.me.is_host){
     pendingBots = false;
@@ -424,8 +433,11 @@ function pump(){
   currentLine = text;
   const sub = $('#subtitle'); if (sub) sub.textContent = text;
   if (muted || !tts || !audioReady){ setTimeout(pump, 300); return; }
+  // không đọc biểu tượng (🤖, 🐺…) – chỉ đọc chữ
+  const spoken = text.replace(/[\p{Extended_Pictographic}\u{1F3FB}-\u{1F3FF}\uFE0F\u200D]/gu, '').replace(/\(\s*/g, '(').replace(/\s+/g, ' ').trim();
+  if (!spoken){ setTimeout(pump, 50); return; }
   speaking = true;
-  const u = new SpeechSynthesisUtterance(text);
+  const u = new SpeechSynthesisUtterance(spoken);
   u.lang = 'vi-VN'; u.rate = rate;
   const v = voices.find(x => x.name === voiceName) || voices[0]; if (v) u.voice = v;
   let doneCalled = false;
@@ -889,6 +901,7 @@ app.addEventListener('click', async e => {
       case 'repeat': if (currentLine){ speakQueue.unshift(currentLine); pump(); } return;
       case 'mute': muted = !muted; if (muted) tts?.cancel(); speaking = false; render(); pump(); return;
       case 'replay_recap': {
+        stopSpeech();
         const lines = ['Diễn biến ván chơi.'];
         let period = null;
         for (const h of S.history){ if (h.period !== period){ period = h.period; lines.push(period + '.'); } lines.push(h.text); }
@@ -922,8 +935,9 @@ app.addEventListener('click', async e => {
       case 'reveal': send({type:'settings', settings:{reveal_role_on_death: !S.settings.reveal_role_on_death}}); return;
       case 'fast': send({type:'settings', settings:{fast_turns: !S.settings.fast_turns}}); return;
       case 'start': send({type:'start'}); return;
-      case 'restart': send({type:'restart'}); return;
+      case 'restart': stopSpeech(); send({type:'restart'}); return;
       case 'leave':
+        stopSpeech();
         if (S && S.phase === 'lobby') send({type:'leave'});
         session = null; S = null; save('masoi_session', null); ws?.close(); render(); return;
       case 'skipdisc': act('skip_discussion'); return;
