@@ -148,7 +148,8 @@ def _get_room(code: str) -> Room:
 
 
 class NameReq(BaseModel):
-    name: str
+    name: str = ""
+    narrator: bool = False  # máy này làm quản trò, không chơi
 
 
 @app.post("/api/rooms")
@@ -156,7 +157,7 @@ async def create_room(req: NameReq):
     _purge_old_rooms()
     room = Room(_new_code(), broadcast)
     try:
-        host = room.add_player(req.name, is_host=True)
+        host = room.add_player(req.name, is_host=True, narrator=req.narrator)
     except GameError as e:
         raise HTTPException(400, str(e))
     rooms[room.code] = room

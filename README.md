@@ -40,6 +40,18 @@ Mạng LAN chạy `http://` (không có HTTPS) nên trình duyệt tắt vài t�
 
 Mã QR tự dùng địa chỉ https của Render, mọi người vào bằng 4G được.
 
+## Máy quản trò (giọng đọc tiếng Việt)
+
+Ở trang chủ chọn **🎙️ Tạo phòng – máy này làm quản trò**. Máy đó không nhận vai, đặt giữa bàn và đọc to toàn bộ lời dẫn bằng giọng tiếng Việt của điện thoại (Web Speech API), đồng thời hiện phụ đề và đồng hồ lớn. Người chơi quét QR vào phòng như bình thường; máy quản trò cũng là chủ phòng (chọn vai, chỉnh thời gian, bắt đầu ván).
+
+Cần cài giọng tiếng Việt: iPhone vào Cài đặt → Trợ năng → Nội dung được đọc → Giọng nói → Tiếng Việt; Android cài Google Text-to-Speech và tải dữ liệu tiếng Việt. Bấm *Bật và nghe thử giọng* ở phòng chờ trước khi bắt đầu (trình duyệt cần một lần chạm mới cho phát tiếng).
+
+Mỗi đêm quản trò đọc: "Màn đêm buông xuống, tất cả mọi người hãy nhắm mắt lại", rồi gọi lần lượt Kẻ Sáng Tạo (đêm 1, 30 giây), Kẻ Nhân Bản (đêm 1), Bảo Vệ, Ma Sói (20 giây), Phù Thủy, Tiên Tri, Nguyệt Nữ, Sói Băng, Kẻ Phù Phép (mặc định 5 giây mỗi vai, chỉnh được). Trước mỗi lượt có thêm 5 giây để đọc câu gọi. Vai nào có trong cấu hình cũng được gọi và chờ đủ giờ, kể cả khi người giữ vai đã chết hay lá đó là lá dư của Kẻ Sáng Tạo, nên không ai đoán được qua thời gian.
+
+Trời sáng, quản trò đọc người chết (và vai nếu bật lật bài), người bị câm, lượt Thợ Săn, giờ thảo luận, giờ bỏ phiếu và người bị treo cổ cùng số phiếu. Hết ván, quản trò đọc lại toàn bộ diễn biến từng đêm, từng ngày; mọi điện thoại cũng hiện bản diễn biến này.
+
+Sói Băng được gọi sau cùng nên lá phong ấn có hiệu lực cho đêm kế tiếp.
+
 ## Chạy trên máy tính
 
 ```bash
@@ -47,7 +59,7 @@ pip install -r requirements.txt
 python main.py
 ```
 
-Muốn thử một mình, mở 4 tab ẩn danh (`MIN_PLAYERS = 4` trong `game.py`; đổi thành 10 khi chơi thật). Kiểm tra engine bằng bot: `python simulate.py` (80 ván, một nửa bật đủ 16 vai).
+Muốn thử một mình, mở 4 tab ẩn danh (`MIN_PLAYERS = 4` trong `game.py`; đổi thành 10 khi chơi thật). Kiểm tra engine bằng bot: `python simulate.py` (30 ván, một nửa bật đủ 16 vai).
 
 ```
 masoi/
@@ -81,14 +93,14 @@ Lịch sử lâu dài (`schema.sql`): `rooms` → `games` → `game_players` (gh
 - Phe Ma Sói: Ma Sói, Sói Biến Chủng, Sói Con, Sói Băng.
 - Phe thứ ba & biến đổi: Kẻ Bị Nguyền, Kẻ Phản Bội, Kẻ Nhân Bản, Kẻ Sáng Tạo.
 
-Thứ tự đêm: Kẻ Sáng Tạo chọn vai lúc chia bài → Kẻ Nhân Bản (chỉ đêm 1) → Nguyệt Nữ → Sói Băng → Bảo Vệ → Bầy sói → Tiên Tri → Phù Thủy → Kẻ Phù Phép.
+Thứ tự đêm: Kẻ Sáng Tạo (đêm 1) → Kẻ Nhân Bản (đêm 1) → Bảo Vệ → Ma Sói → Phù Thủy → Tiên Tri → Nguyệt Nữ → Sói Băng → Kẻ Phù Phép.
 
 **Luật đã cài**:
 - Bảo Vệ không che một người hai đêm liền. Nguyệt Nữ chọn soi đúng vai một người, hoặc che chắn một người khỏi bị cắn và bị phong ấn.
 - Phù Thủy cứu trúng người đã được bảo vệ thì được hoàn bình cứu; đầu độc người đằng nào cũng chết vì sói thì được hoàn bình độc.
 - Thợ Săn chỉ được bắn khi chết trong đêm.
 - Người Bệnh bị cắn chết thì đêm sau bầy không cắn. Sói Con chết thì đêm sau bầy cắn 2 người.
-- Sói Băng phong ấn một người: Bảo Vệ, Tiên Tri, Phù Thủy, Kẻ Phù Phép mất lượt; Thợ Săn không bắn được; Người Bệnh mất tác dụng.
+- Sói Băng phong ấn một người cho đêm kế tiếp: Bảo Vệ, Tiên Tri, Phù Thủy, Nguyệt Nữ, Kẻ Phù Phép mất lượt; Thợ Săn không bắn được; Người Bệnh mất tác dụng.
 - Sói Biến Chủng là Dân Làng trong đêm 1 (Tiên Tri soi ra Dân), từ đêm 2 vào bầy.
 - Kẻ Bị Nguyền bị cắn thì hoá sói. Kẻ Phản Bội soi ra Dân; khi sói chết hết thì hoá Ma Sói cuối cùng.
 - Kẻ Nhân Bản nhận vai và phe khi mục tiêu chết. Có Kẻ Sáng Tạo thì cần thêm 2 lá: 2 lá dư được Kẻ Sáng Tạo xem và chọn 1.

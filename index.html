@@ -185,6 +185,25 @@ body.has-confirm .role-btn{display:none}
 .confirm .row .btn{margin:0}
 .potion .btn+.btn{margin-top:8px}
 .t-third{color:var(--violet)}
+.narr-stage{text-align:center;padding:4vh 0 2vh}
+.narr-stage .big{font-size:56px;line-height:1}
+.narr-stage h2{font-size:30px;margin:12px 0 6px}
+.narr-timer{font:700 72px/1 var(--sans);font-variant-numeric:tabular-nums;color:var(--lantern);margin:10px 0}
+.narr-timer.urgent{color:var(--blood)}
+.subtitle{min-height:5.6em;padding:18px;border-radius:18px;background:var(--card);border:1px solid var(--line);
+  font:500 21px/1.45 var(--serif);text-align:center;display:flex;align-items:center;justify-content:center;text-wrap:balance}
+.narr-tools{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}
+.narr-tools .btn{margin:0}
+.audio-box{padding:16px;border-radius:18px;background:var(--card);border:1px solid var(--line);margin:18px 0}
+.audio-box h3{font-size:18px;margin-bottom:6px}
+.audio-box p{color:var(--mist);font-size:14px;margin-bottom:10px}
+select{width:100%;min-height:50px;border-radius:12px;border:1px solid var(--line);background:rgba(0,0,0,.25);
+  color:var(--bone);font:inherit;padding:0 12px;margin-bottom:10px}
+.warn{color:#f0c38a;font-size:14px;margin:8px 0}
+.recap h4{font:600 15px/1.3 var(--sans);color:var(--lantern);margin:16px 0 4px}
+.recap p{font-size:15px;padding:4px 0;border-bottom:1px solid var(--line)}
+.unlock{position:fixed;inset:0;z-index:12;display:flex;flex-direction:column;gap:16px;align-items:center;justify-content:center;
+  padding:24px;text-align:center;background:var(--sky)}
 .toast{position:fixed;left:16px;right:16px;top:calc(12px + env(safe-area-inset-top,0));max-width:488px;margin:0 auto;
   padding:14px 16px;border-radius:14px;background:#3a1b1f;color:#f6d0d3;z-index:20;display:none}
 .toast.show{display:block}
@@ -221,7 +240,7 @@ const GROUPS = [
 ];
 const WOLF_CARDS = ['werewolf','mutant_wolf','wolf_cub','snow_wolf'];
 const PHASE = {
-  lobby:'Phòng chờ', setup_creator:'Chia bài', night_cloner:'Kẻ Nhân Bản thức dậy',
+  lobby:'Phòng chờ', nightfall:'Màn đêm buông xuống', night_creator:'Kẻ Sáng Tạo thức dậy', night_cloner:'Kẻ Nhân Bản thức dậy',
   night_moon:'Nguyệt Nữ thức dậy', night_snow:'Sói Băng thức dậy', night_guard:'Bảo Vệ thức dậy',
   night_wolves:'Bầy sói thức dậy', night_seer:'Tiên Tri thức dậy', night_witch:'Phù Thủy thức dậy',
   night_spell:'Kẻ Phù Phép thức dậy', dawn:'Bình minh', day_discuss:'Thảo luận',
@@ -272,6 +291,7 @@ async function api(path, body){
 function connect(){
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const q = new URLSearchParams({pid:session.player_id, token:session.token});
+  firstState = true;
   ws = new WebSocket(`${proto}://${location.host}/ws/${session.code}?${q}`);
   ws.onmessage = e => {
     const m = JSON.parse(e.data);
@@ -287,9 +307,10 @@ function connect(){
 }
 
 function onState(){
+  if (S.me.narrator) queueSpeech(S.speech);
   const key = `${S.phase}-${S.day}`;
   if (key !== stepKey){ stepKey = key; picks = []; if (S.action) navigator.vibrate?.([120,60,120]); }
-  if (S.phase !== 'lobby') keepAwake();
+  if (S.phase !== 'lobby' || S.me.narrator) keepAwake();
   render();
 }
 
@@ -299,12 +320,57 @@ async function keepAwake(){
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden && S && S.phase !== 'lobby') keepAwake(); });
 
+/* ---------------- giọng quản trò (Web Speech API) ---------------- */
+let voices = [], voiceName = load('masoi_voice'), rate = load('masoi_rate') || 1, muted = false;
+let audioReady = false, firstState = true, lastSpoken = 0, currentLine = '', speakQueue = [], speaking = false;
+const tts = window.speechSynthesis;
+function loadVoices(){
+  if (!tts) return;
+  voices = tts.getVoices().filter(v => (v.lang || '').toLowerCase().replace('_', '-').startsWith('vi'));
+  if (S?.me?.narrator && S.phase === 'lobby') render();
+}
+if (tts){ loadVoices(); tts.onvoiceschanged = loadVoices; setInterval(() => { if (tts.speaking) tts.resume(); }, 4000); }
+
+function queueSpeech(list){
+  if (firstState){  // vừa (nối lại) kết nối: không đọc lại các câu cũ
+    firstState = false;
+    if (S.phase !== 'lobby' && list.length) lastSpoken = Math.max(lastSpoken, list[list.length - 1].id);
+    return;
+  }
+  for (const line of list) if (line.id > lastSpoken){ lastSpoken = line.id; speakQueue.push(line.text); }
+  pump();
+}
+function pump(){
+  if (speaking || !speakQueue.length) return;
+  const text = speakQueue.shift();
+  currentLine = text;
+  const sub = $('#subtitle'); if (sub) sub.textContent = text;
+  if (muted || !tts || !audioReady){ setTimeout(pump, 300); return; }
+  speaking = true;
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = 'vi-VN'; u.rate = rate;
+  const v = voices.find(x => x.name === voiceName) || voices[0]; if (v) u.voice = v;
+  let doneCalled = false;
+  const done = () => { if (doneCalled) return; doneCalled = true; speaking = false; pump(); };
+  u.onend = done; u.onerror = done;
+  setTimeout(done, 2500 + text.length * 120 / rate);  // phòng khi trình duyệt không báo onend
+  tts.speak(u);
+}
+function unlockAudio(){
+  if (!tts){ toast('Trình duyệt này không hỗ trợ đọc giọng nói'); return; }
+  audioReady = true;
+  tts.cancel(); speaking = false;
+  speakQueue.unshift('Xin chào, tôi là quản trò. Chúc mọi người chơi vui vẻ.');
+  pump();
+}
+
 /* ---------------- render ---------------- */
 function render(){
   document.body.classList.remove('has-confirm');
   if (!session || !S){ renderHome(); return; }
   if (S.phase === 'lobby') renderLobby();
   else if (S.phase === 'ended') renderEnd();
+  else if (S.me.narrator) renderNarrator();
   else renderGame();
   tick();
 }
@@ -333,7 +399,8 @@ function renderHome(){
       <p class="sub">Không cần quản trò. Điện thoại của mỗi người lo phần còn lại.</p>
       <label class="field"><span>Tên của bạn</span>
         <input id="name" maxlength="20" autocomplete="nickname" value="${esc(load('masoi_name') || '')}"></label>
-      <button class="btn primary" data-do="create">Tạo phòng mới</button>
+      <button class="btn primary" data-do="create">Tạo phòng – tôi cũng chơi</button>
+      <button class="btn" data-do="create_narrator">🎙️ Tạo phòng – máy này làm quản trò</button>
       <p class="or">hoặc vào phòng của bạn bè</p>
       <label class="field"><span>Mã phòng (4 chữ)</span>
         <input id="code" maxlength="4" autocapitalize="characters" autocomplete="off" value="${esc(room)}"></label>
@@ -397,6 +464,8 @@ function renderLobby(){
       <p>Mở camera điện thoại và quét để vào phòng. Phải dùng chung Wi-Fi hoặc điểm phát sóng với máy chủ.</p>
       <p style="opacity:.6">Chạm để đóng</p></div>` : ''}
 
+    ${S.me.narrator ? audioPanel() : ''}
+    ${S.narrator ? `<p class="muted" style="margin-top:12px">🎙️ Quản trò: ${esc(S.narrator.name)}${S.narrator.connected ? '' : ' (mất kết nối)'}</p>` : ''}
     <div class="section"><h3>Người chơi</h3></div>
     <div class="chips">${S.players.map(p => `<span class="chip ${p.connected ? '' : 'off'}">
       ${p.is_host ? '<span class="host">★</span> ' : ''}${esc(p.name)}${p.id === S.me.id ? ' (bạn)' : ''}</span>`).join('')}</div>
@@ -407,7 +476,10 @@ function renderLobby(){
     ${roleSection}
     <div class="total ${problem ? 'bad' : 'ok'}">${problem || `${n} người: ${specials} vai đặc biệt + ${r.villager || 0} Dân Làng${creator ? ' (đã tính 2 lá dư cho Kẻ Sáng Tạo)' : ''}. Sẵn sàng.`}</div>
 
-    <div class="opt"><span>Thời gian mỗi lượt đêm</span>${seg('night_step_seconds', [20,30,45,60], v => `${v}s`)}</div>
+    <div class="opt"><span>Kẻ Sáng Tạo chọn lá</span>${seg('creator_seconds', [20,30,45], v => `${v}s`)}</div>
+    <div class="opt"><span>Ma Sói chọn mồi</span>${seg('wolves_seconds', [15,20,30,45], v => `${v}s`)}</div>
+    <div class="opt"><span>Các vai còn lại (Bảo Vệ, Phù Thủy, Tiên Tri…)</span>${seg('role_seconds', [5,10,15,20], v => `${v}s`)}</div>
+    <div class="opt"><span>Thợ Săn bắn</span>${seg('hunter_seconds', [10,15,20], v => `${v}s`)}</div>
     <div class="opt"><span>Thảo luận ban ngày</span>${seg('discuss_seconds', [60,120,180,300], mins)}</div>
     <div class="opt"><span>Bỏ phiếu</span>${seg('vote_seconds', [30,60,90], v => `${v}s`)}</div>
     <button class="toggle ${S.settings.reveal_role_on_death ? 'on' : ''}" ${host ? 'data-do="reveal"' : 'disabled'}>
@@ -573,7 +645,58 @@ function renderEnd(){
     <div style="margin-top:24px">
       ${S.me.is_host ? '<button class="btn primary" data-do="restart">Chơi ván mới</button>' : '<p class="muted" style="text-align:center">Chờ chủ phòng mở ván mới…</p>'}
       <button class="btn" data-do="leave">Rời phòng</button></div>
-    <details class="log"><summary>Nhật ký ván chơi</summary>${S.log.map(l => `<p>${esc(l.text)}</p>`).join('')}</details>`;
+    ${recapHtml()}
+    ${S.me.narrator ? `<div class="narr-tools"><button class="btn" data-do="replay_recap">🔊 Đọc lại diễn biến</button>
+      <button class="btn" data-do="mute">${muted ? '🔈 Bật tiếng' : '🔇 Tắt tiếng'}</button></div>` : ''}`;
+}
+
+function recapHtml(){
+  if (!S.history?.length) return '';
+  let period = null, out = '';
+  for (const h of S.history){
+    if (h.period !== period){ period = h.period; out += `<h4>${esc(period)}</h4>`; }
+    out += `<p>${esc(h.text)}</p>`;
+  }
+  return `<div class="section"><h3>Diễn biến ván chơi</h3></div><div class="recap">${out}</div>`;
+}
+
+/* ---------------- máy quản trò ---------------- */
+function renderNarrator(){
+  const ph = S.phase, night = ph.startsWith('night');
+  document.body.className = night ? 'night' : 'day';
+  const icon = night ? '🌙' : ph === 'hunter_shot' ? '🏹' : ph === 'day_vote' || ph === 'verdict' ? '⚖️' : '☀️';
+  const alive = S.players.filter(p => p.alive).length;
+  app.innerHTML = `
+    <div class="narr-stage"><div class="big">${icon}</div><h2>${PHASE[ph]}</h2>
+      <span class="meta">${night ? 'Đêm' : 'Ngày'} ${Math.max(1, S.day)}, còn ${alive}/${S.players.length} người sống</span>
+      <div class="narr-timer js-timer"></div></div>
+    <div class="subtitle" id="subtitle">${esc(currentLine || '…')}</div>
+    <div class="narr-tools">
+      <button class="btn" data-do="repeat">🔁 Nhắc lại</button>
+      <button class="btn" data-do="mute">${muted ? '🔈 Bật tiếng' : '🔇 Tắt tiếng'}</button></div>
+    ${ph === 'day_discuss' ? `<div style="margin-top:12px"><button class="btn primary" data-do="skipdisc">Mọi người đã sẵn sàng – bỏ phiếu ngay</button></div>` : ''}
+    ${ph === 'day_vote' ? tally() : ''}
+    <details class="log"><summary>Nhật ký công khai</summary>
+      ${S.log.slice().reverse().map(l => `<p>${esc(l.text)}</p>`).join('')}</details>
+    <button class="role-btn" id="roleBtn">Giữ để xem bài của mọi người</button>
+    <div class="reveal ${revealing ? 'show' : ''}" id="reveal" style="justify-content:flex-start;overflow:auto">
+      <h2 style="font-size:28px">Bài của mọi người</h2>
+      <div class="roster" style="width:100%;max-width:420px;text-align:left">${S.players.map(p => `<div class="${p.alive ? '' : 'dead'}">
+        <span>${esc(p.name)}</span><span>${ROLE[p.role]?.icon || ''} ${ROLE[p.role]?.name || ''}</span></div>`).join('')}</div></div>
+    ${!audioReady && !muted ? `<div class="unlock"><div class="big" style="font-size:64px">🔊</div>
+      <h2>Chạm để bật giọng quản trò</h2><p class="muted">Trình duyệt cần bạn chạm một lần mới cho phát âm thanh.</p>
+      <button class="btn primary" data-do="unlock" style="max-width:320px">Bật âm thanh</button></div>` : ''}`;
+}
+
+function audioPanel(){
+  const opts = voices.map(v => `<option value="${esc(v.name)}" ${v.name === voiceName ? 'selected' : ''}>${esc(v.name)}</option>`).join('');
+  return `<div class="audio-box"><h3>🎙️ Giọng quản trò</h3>
+    <p>Máy này sẽ đọc lời dẫn. Đặt máy giữa bàn, bật âm lượng lớn và để màn hình luôn sáng.</p>
+    ${voices.length ? `<select id="voice">${opts}</select>`
+      : `<div class="warn">Chưa thấy giọng tiếng Việt trên máy này. iPhone: Cài đặt → Trợ năng → Nội dung được đọc → Giọng nói → Tiếng Việt, tải giọng "Linh". Android: cài Google Text-to-Speech và tải dữ liệu tiếng Việt.</div>`}
+    <div class="opt" style="margin:6px 0 12px"><span>Tốc độ đọc</span><div class="seg">${[0.9, 1, 1.1].map(r =>
+      `<button class="${rate === r ? 'on' : ''}" data-rate="${r}">${r === 1 ? 'Bình thường' : r < 1 ? 'Chậm' : 'Nhanh'}</button>`).join('')}</div></div>
+    <button class="btn ${audioReady ? '' : 'primary'}" data-do="unlock">${audioReady ? '🔊 Nghe thử lại' : '🔊 Bật và nghe thử giọng'}</button></div>`;
 }
 
 /* ---------------- đồng hồ ---------------- */
@@ -608,12 +731,27 @@ app.addEventListener('click', async e => {
     roles.werewolf = Math.max(0, Math.min(30, (roles.werewolf || 0) + Number(b.dataset.d)));
     send({type:'settings', settings:{roles}}); return;
   }
+  if (b.dataset.rate){ rate = Number(b.dataset.rate); save('masoi_rate', rate); render(); return; }
   if (b.dataset.set){ send({type:'settings', settings:{[b.dataset.set]: Number(b.dataset.v)}}); return; }
 
   const name = () => { const v = $('#name').value.trim(); if (!v) throw new Error('Hãy nhập tên của bạn'); save('masoi_name', v); return v; };
   try {
     switch (b.dataset.do){
       case 'create': session = await api('/api/rooms', {name:name()}); break;
+      case 'create_narrator': {
+        const v = $('#name').value.trim();
+        session = await api('/api/rooms', {name:v ? `🎙️ ${v}` : 'Quản trò', narrator:true});
+        unlockAudio(); break;
+      }
+      case 'unlock': unlockAudio(); render(); return;
+      case 'repeat': if (currentLine){ speakQueue.unshift(currentLine); pump(); } return;
+      case 'mute': muted = !muted; if (muted) tts?.cancel(); speaking = false; render(); pump(); return;
+      case 'replay_recap': {
+        const lines = ['Diễn biến ván chơi.'];
+        let period = null;
+        for (const h of S.history){ if (h.period !== period){ period = h.period; lines.push(period + '.'); } lines.push(h.text); }
+        speakQueue.push(...lines); pump(); return;
+      }
       case 'join': {
         const code = $('#code').value.trim().toUpperCase();
         if (code.length !== 4) throw new Error('Mã phòng gồm 4 chữ cái');
@@ -653,6 +791,10 @@ app.addEventListener('click', async e => {
     }
     save('masoi_session', session); history.replaceState(null, '', '/'); connect();
   } catch (err) { toast(err.message); }
+});
+
+app.addEventListener('change', e => {
+  if (e.target.id === 'voice'){ voiceName = e.target.value; save('masoi_voice', voiceName); unlockAudio(); }
 });
 
 /* Giữ nút để xem vai – thả tay là che đi, an toàn khi ngồi cạnh nhau */
