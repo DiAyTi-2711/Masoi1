@@ -328,6 +328,14 @@ select{width:100%;min-height:50px;border-radius:12px;border:1px solid var(--line
 .pause-ov h2{font:700 30px/1.2 var(--serif)}
 .pause-ov p{color:var(--mist);max-width:30ch}
 .pause-ov .btn{max-width:320px}
+.lookcard{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;width:190px;height:270px;margin:22px auto 22px;
+  border-radius:20px;border:2px solid rgba(232,168,74,.55);color:var(--bone);touch-action:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;
+  background:repeating-linear-gradient(45deg,rgba(232,168,74,.08) 0 10px,transparent 10px 20px),linear-gradient(160deg,#2a2350,#141833);
+  box-shadow:0 14px 34px rgba(0,0,0,.45),inset 0 0 0 8px rgba(255,255,255,.03);transition:transform .15s}
+.lookcard:active{transform:scale(.97)}
+.lc-moon{font-size:56px;line-height:1}
+.lc-title{font:700 19px/1.2 var(--serif)}
+.lc-hint{font-size:13px;color:var(--mist)}
 .toast{position:fixed;left:16px;right:16px;top:calc(12px + env(safe-area-inset-top,0));max-width:488px;margin:0 auto;
   padding:14px 16px;border-radius:14px;background:#3a1b1f;color:#f6d0d3;z-index:20;display:none}
 .toast.show{display:block}
@@ -394,7 +402,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt
 const initials = n => n.startsWith('🤖') ? '🤖'
   : n.trim().split(/\s+/).slice(-2).map(w => [...w][0] || '').join('').toUpperCase();
 
-let invite = null, qrFull = false, pendingBots = false;
+let invite = null, qrFull = false, pendingBots = false, lookedOnce = false;
 let S = null, ws = null, clockOffset = 0, picks = [], stepKey = '', revealing = false, wakeLock = null;
 let session = load('masoi_session');
 
@@ -461,7 +469,7 @@ function onState(){
   syncHostConfig();
   if (document.activeElement?.dataset?.script || document.activeElement?.closest?.('#roleForm')){ pendingRender = true; return; }  // đang gõ: chưa vẽ lại
   const key = `${S.phase}-${S.day}`;
-  if (key !== stepKey){ stepKey = key; picks = []; if (S.action) navigator.vibrate?.([120,60,120]); }
+  if (key !== stepKey){ stepKey = key; picks = []; if (S.phase === 'reveal') lookedOnce = false; if (S.action) navigator.vibrate?.([120,60,120]); }
   if (S.phase !== 'lobby' || S.me.narrator) keepAwake();
   render();
 }
@@ -1086,15 +1094,13 @@ function confirmBar(a, K){
 
 function renderAction(a){
   const K = KIND[a.kind] || {t: a.title, d: a.desc, btn: a.verb, rt: a.title, danger: a.danger};
-  if (a.kind === 'look'){
-    const R = RI(S.me.role) || {}, [team, cls] = teamOf();
-    return `<div class="panel" style="text-align:center;padding-top:3vh">
-      <p class="muted">Đây là lá bài của bạn. Đừng để ai nhìn thấy.</p>
-      <div style="font-size:88px;line-height:1;margin:18px 0 8px">${R.icon || '❔'}</div>
-      <h2 style="font-size:36px">${esc(R.name || '')}</h2>
-      <div class="${cls}" style="margin:6px 0 12px;font-weight:600">${team}</div>
-      <p class="muted" style="max-width:32ch;margin:0 auto 20px">${esc(R.desc || '')}</p>
-      <button class="btn primary" data-ack="seen_role">✓ Đã nhớ, nhắm mắt</button></div>`;
+  if (a.kind === 'look'){   // lá bài úp: người chơi tự nhấn giữ để xem
+    return `<div class="panel" style="text-align:center;padding-top:2vh">
+      <p class="muted">Nhấn giữ lá bài để xem vai của bạn.<br>Thả tay ra là lá bài úp lại.</p>
+      <button class="lookcard" id="lookCard" aria-label="Nhấn giữ để xem lá bài">
+        <span class="lc-moon">🂠</span><span class="lc-title">Lá bài của bạn</span><span class="lc-hint">Nhấn giữ để xem</span></button>
+      ${lookedOnce ? '<button class="btn primary" data-ack="seen_role">✓ Đã xem, nhắm mắt</button>'
+                   : '<p class="muted" style="font-size:14px">Xem xong, nút “Đã xem” sẽ hiện ra.</p>'}</div>`;
   }
   if (a.info) return `<div class="panel"><h2>${K.t}</h2><div class="result">${esc(a.info)}</div>
     <button class="btn primary" data-ack="${a.ack}">Đã hiểu, nhắm mắt</button></div>`;
@@ -1512,12 +1518,19 @@ app.addEventListener('change', e => {
 
 /* Giữ nút để xem vai – thả tay là che đi, an toàn khi ngồi cạnh nhau */
 document.addEventListener('pointerdown', e => {
-  if (e.target.closest('#roleBtn')){ e.preventDefault(); revealing = true; $('#reveal')?.classList.add('show'); }
+  const look = e.target.closest('#lookCard');
+  if (look || e.target.closest('#roleBtn')){
+    e.preventDefault(); revealing = true; $('#reveal')?.classList.add('show');
+    if (look && !lookedOnce){ lookedOnce = true; window.lookJustOpened = true; }
+  }
 });
 ['pointerup','pointercancel','blur'].forEach(ev => window.addEventListener(ev, () => {
-  if (revealing){ revealing = false; $('#reveal')?.classList.remove('show'); }
+  if (revealing){
+    revealing = false; $('#reveal')?.classList.remove('show');
+    if (window.lookJustOpened){ window.lookJustOpened = false; render(); }   // hiện nút "Đã xem"
+  }
 }));
-document.addEventListener('contextmenu', e => { if (e.target.closest('#roleBtn')) e.preventDefault(); });
+document.addEventListener('contextmenu', e => { if (e.target.closest('#roleBtn, #lookCard')) e.preventDefault(); });
 
 if (session) connect(); render();
 </script>
