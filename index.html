@@ -217,6 +217,17 @@ select{width:100%;min-height:50px;border-radius:12px;border:1px solid var(--line
 .sline .tools button{min-height:36px;padding:0 10px;border-radius:9px;background:var(--card-2);font-size:13px}
 .sline .tools .ph{background:rgba(232,168,74,.14);color:var(--lantern)}
 .sline .bad{color:#f0a3a8;font-size:13px;margin-top:4px}
+.score{width:100%;border-collapse:collapse;font-size:14px}
+.score th{color:var(--mist);font-weight:600;text-align:right;padding:6px 4px;font-size:12px}
+.score th:first-child,.score th:nth-child(2){text-align:left}
+.score td{padding:9px 4px;border-top:1px solid var(--line);text-align:right;font-variant-numeric:tabular-nums}
+.score td:first-child{text-align:left;width:34px}
+.score td.n{text-align:left}
+.score tr.me td{color:var(--lantern);font-weight:700}
+.score td small{display:block;color:var(--mist);font-weight:400;font-size:12px}
+.gain{font-weight:700}
+.gain.plus{color:#9fd8cf}
+.rules{font-size:13px;color:var(--mist);margin:6px 0 10px}
 .toast{position:fixed;left:16px;right:16px;top:calc(12px + env(safe-area-inset-top,0));max-width:488px;margin:0 auto;
   padding:14px 16px;border-radius:14px;background:#3a1b1f;color:#f6d0d3;z-index:20;display:none}
 .toast.show{display:block}
@@ -246,6 +257,10 @@ const ROLE = {
   cloner:{name:'Kẻ Nhân Bản',icon:'🧬',desc:'Đêm đầu chọn 1 người. Người đó chết thì nhận vai và phe của họ.'},
   creator:{name:'Kẻ Sáng Tạo',icon:'✨',desc:'Thêm 2 lá dư khi chia bài. Xem 2 lá đó và chọn 1 làm vai của mình.'},
 };
+/* Thông tin vai: vai có sẵn hoặc vai tự tạo (S.role_defs) */
+const RI = k => ROLE[k] || (S?.role_defs?.[k] ? {...S.role_defs[k], team: S.role_defs[k].team === 'wolves' ? 'wolf' : 'village'}
+                                               : (k ? {name: k, icon: '❔', desc: ''} : undefined));
+const phaseLabel = ph => ph === 'night_custom' && S?.custom_step ? `${S.custom_step.name} thức dậy` : (PHASE[ph] || ph);
 const GROUPS = [
   {title:'Phe Ma Sói', keys:['werewolf','mutant_wolf','wolf_cub','snow_wolf']},
   {title:'Phe Dân Làng', keys:['bodyguard','seer','witch','hunter','diseased','moon_maiden','spellcaster','villager']},
@@ -333,7 +348,7 @@ function onState(){
   if (S.me.narrator || (S.me.is_host && S.settings.host_voice)) queueSpeech(S.speech);
   if (pendingBots && S.phase === 'lobby' && S.me.is_host){
     pendingBots = false;
-    send({type:'bots', op:'fill', n:8});
+    send({type:'bots', op:'fill', n: Math.max(8, S.players.length + (load('masoi_last_config')?.bots || 0))});
     send({type:'settings', settings:{host_voice:true}});
   }
   if (S.me.narrator && S.me.is_host && !scriptsSynced){
@@ -342,7 +357,8 @@ function onState(){
     if (local && Object.keys(local).length && !Object.keys(S.settings.scripts || {}).length)
       send({type:'settings', settings:{scripts: local}});
   }
-  if (document.activeElement?.dataset?.script){ pendingRender = true; return; }  // đang gõ: chưa vẽ lại
+  syncHostConfig();
+  if (document.activeElement?.dataset?.script || document.activeElement?.closest?.('#roleForm')){ pendingRender = true; return; }  // đang gõ: chưa vẽ lại
   const key = `${S.phase}-${S.day}`;
   if (key !== stepKey){ stepKey = key; picks = []; if (S.action) navigator.vibrate?.([120,60,120]); }
   if (S.phase !== 'lobby' || S.me.narrator) keepAwake();
@@ -368,11 +384,14 @@ const SCRIPT_GROUPS = [
     ['host_skip', 'Quản trò cho bỏ phiếu ngay'], ['vote', 'Bắt đầu bỏ phiếu'],
     ['lynch', 'Có người bị treo cổ', ['ten', 'so_phieu']], ['no_lynch', 'Không ai bị treo cổ'],
     ['vote_detail', 'Công khai phiếu (khi bật hiển thị ai vote ai)', ['ten', 'so_phieu', 'nguoi_bo_phieu']]]],
-  ['Kết thúc', [['end', 'Công bố phe thắng', ['phe_thang']], ['thanks', 'Lời chào cuối'], ['cancel', 'Huỷ ván']]],
+  ['Kết thúc', [['end', 'Công bố phe thắng', ['phe_thang']], ['ranking', 'Đọc bảng xếp hạng (3 người đầu)', ['so_van', 'xep_hang']],
+    ['thanks', 'Lời chào cuối'], ['cancel', 'Huỷ ván']]],
 ];
 const PH_LABEL = {dem:'số đêm', vai:'tên vai', nguoi_chet:'tên người chết', ten:'tên người', so_phieu:'số phiếu',
-  thoi_gian:'thời gian', phe_thang:'phe thắng', nguoi_bo_phieu:'người bỏ phiếu'};
-const SAMPLE = {dem:1, vai:'Bảo Vệ', nguoi_chet:'An và Bình', ten:'An', so_phieu:5, thoi_gian:'3 phút', phe_thang:'Phe Dân Làng', nguoi_bo_phieu:'Bình, Chi và Dũng'};
+  thoi_gian:'thời gian', phe_thang:'phe thắng', nguoi_bo_phieu:'người bỏ phiếu',
+  so_van:'số ván', xep_hang:'danh sách xếp hạng'};
+const SAMPLE = {dem:1, vai:'Bảo Vệ', nguoi_chet:'An và Bình', ten:'An', so_phieu:5, thoi_gian:'3 phút', phe_thang:'Phe Dân Làng', nguoi_bo_phieu:'Bình, Chi và Dũng', so_van:3,
+  xep_hang:'hạng 1 là An với 3 điểm, hạng 2 là Bình với 2 điểm, hạng 3 là Chi với 1 điểm'};
 let editorOpen = false, pendingRender = false, scriptsSynced = false, saveTimer = null;
 const fillSample = t => t.replace(/\{(\w+)\}/g, (m, k) => k in SAMPLE ? SAMPLE[k] : m);
 const scriptText = key => S.settings.scripts?.[key] || S.script_defaults?.[key] || '';
@@ -509,6 +528,89 @@ async function loadInvite(i = 0){
   } catch {}
 }
 
+/* ---------------- vai tự tạo ---------------- */
+const CR_ACTIONS = {none:'Không có (vai bị động)', protect:'Bảo vệ 1 người khỏi bị giết', check_team:'Soi phe (Dân hay Sói)',
+  check_role:'Soi đúng vai', kill:'Giết 1 người'};
+const CR_ICONS = ['🩺','🕵️','🗡️','👴','🧙','🦉','🐍','👑','🔥','🌟'];
+let editingRole = null;
+const crLib = () => load('masoi_custom_roles') || {};
+
+function customSection(){
+  const defs = S.settings.custom_roles || {}, r = S.settings.roles;
+  const cards = Object.entries(defs).map(([k, d]) => `<div class="rcard ${(r[k] || 0) ? 'on' : ''}">
+    <span class="ricon">${esc(d.icon)}</span>
+    <div class="rinfo"><b>${esc(d.name)}</b><small>${d.team === 'wolves' ? 'Phe Sói' : 'Phe Dân'} · ${esc(CR_ACTIONS[d.action])}${d.tough ? ' · chịu 1 lần cắn' : ''}${d.revenge ? ' · chết đêm kéo theo 1 người' : ''}</small>
+      <button class="muted" data-cedit="${k}" style="font-size:13px;padding:6px 0">✏️ Sửa</button></div>
+    <div class="stepper"><button data-cn="${k}" data-d="-1" aria-label="Bớt">−</button><output>${r[k] || 0}</output>
+      <button data-cn="${k}" data-d="1" aria-label="Thêm">+</button></div></div>`).join('');
+  return `<h4 class="ghead">Vai tự tạo</h4><div class="rlist">${cards}</div>
+    ${editingRole ? roleForm() : `<button class="btn" data-do="cr_new" style="margin-top:8px">➕ Tạo vai mới</button>`}`;
+}
+function roleForm(){
+  const d = editingRole;
+  const opt = (field, list) => Object.entries(list).map(([v, l]) => `<option value="${v}" ${String(d[field]) === String(v) ? 'selected' : ''}>${l}</option>`).join('');
+  const tog = (field, label) => `<button class="toggle ${d[field] ? 'on' : ''}" data-crt="${field}"><span>${label}</span><i></i></button>`;
+  return `<div class="audio-box" id="roleForm"><h3>${d.id ? 'Sửa vai' : 'Tạo vai mới'}</h3>
+    <label class="field"><span>Tên vai</span><input data-cr="name" maxlength="20" value="${esc(d.name)}" placeholder="VD: Bác Sĩ"></label>
+    <label class="field"><span>Biểu tượng</span><input data-cr="icon" maxlength="4" value="${esc(d.icon)}" style="width:90px"></label>
+    <div class="presets">${CR_ICONS.map(i => `<button data-cri="${i}">${i}</button>`).join('')}</div>
+    <div class="opt"><span>Phe</span><div class="seg">
+      <button class="${d.team === 'village' ? 'on' : ''}" data-crteam="village">🏡 Phe Dân</button>
+      <button class="${d.team === 'wolves' ? 'on' : ''}" data-crteam="wolves">🐺 Phe Sói (thức cùng bầy)</button></div></div>
+    <label class="field"><span>Năng lực ban đêm</span><select data-cr="action">${opt('action', CR_ACTIONS)}</select></label>
+    ${d.action !== 'none' ? `<label class="field"><span>Số lần dùng</span><select data-cr="uses">${opt('uses', {0:'Mỗi đêm', 1:'1 lần cả ván', 2:'2 lần cả ván', 3:'3 lần cả ván'})}</select></label>
+      <label class="field"><span>Bắt đầu từ</span><select data-cr="start_night">${opt('start_night', {1:'Đêm 1', 2:'Đêm 2', 3:'Đêm 3'})}</select></label>
+      ${tog('no_repeat', 'Không được chọn một người hai đêm liền')}` : ''}
+    ${tog('tough', 'Chịu được 1 lần sói cắn')}
+    ${tog('revenge', 'Chết trong đêm được kéo theo 1 người')}
+    <label class="field"><span>Tiên Tri soi ra</span><select data-cr="seen_as">${opt('seen_as', {'':'Đúng phe thật', village:'Luôn là phe Dân', wolf:'Luôn là phe Sói'})}</select></label>
+    <label class="field"><span>Mô tả (người giữ vai sẽ đọc)</span><textarea data-cr="desc" rows="2" maxlength="160" style="width:100%;border-radius:12px;padding:10px;background:rgba(0,0,0,.25);color:var(--bone);border:1px solid var(--line);font:inherit">${esc(d.desc)}</textarea></label>
+    ${d.action !== 'none' ? `<label class="field"><span>Câu quản trò gọi vai (để trống = tự tạo)</span><textarea data-cr="call" rows="2" maxlength="200" style="width:100%;border-radius:12px;padding:10px;background:rgba(0,0,0,.25);color:var(--bone);border:1px solid var(--line);font:inherit">${esc(d.call)}</textarea></label>` : ''}
+    <button class="btn primary" data-do="cr_save">💾 Lưu vai</button>
+    <button class="btn" data-do="cr_cancel">Huỷ</button>
+    ${d.id ? '<button class="btn danger" data-do="cr_delete">🗑️ Xoá vai này</button>' : ''}
+    <p class="muted" style="font-size:13px;margin-top:8px">Vai được lưu trên máy này và tự có lại khi bạn tạo phòng sau.</p></div>`;
+}
+function saveCustomRole(){
+  const d = editingRole;
+  if (!d.name.trim()){ toast('Hãy đặt tên cho vai'); return; }
+  const id = d.id || 'c_' + Math.random().toString(36).slice(2, 8);
+  const def = {name: d.name.trim(), icon: d.icon || '⭐', team: d.team, action: d.action, uses: Number(d.uses),
+    start_night: Number(d.start_night), no_repeat: !!d.no_repeat, tough: !!d.tough, revenge: !!d.revenge,
+    seen_as: d.seen_as, desc: d.desc.trim(), call: d.call.trim()};
+  const lib = crLib(); lib[id] = def; save('masoi_custom_roles', lib);
+  const roles = {...S.settings.roles}; if (!d.id) roles[id] = 1;
+  send({type:'settings', settings:{custom_roles:{[id]: def}, roles}});
+  editingRole = null;
+}
+
+/* ---------------- nhớ cấu hình phòng cho lần sau ---------------- */
+let configSynced = null;
+const CONFIG_KEYS = ['creator_seconds', 'wolves_seconds', 'role_seconds', 'hunter_seconds', 'discuss_seconds',
+  'vote_seconds', 'reveal_role_on_death', 'fast_turns', 'show_votes', 'host_voice'];
+function syncHostConfig(){
+  if (!S.me.is_host || S.phase !== 'lobby') return;
+  const bots = S.players.filter(p => p.bot).length;
+  if (configSynced !== S.code){   // phòng mới: áp dụng cấu hình đã lưu đúng một lần
+    configSynced = S.code;
+    const lib = crLib(), cfg = load('masoi_last_config');
+    const settings = {};
+    const missing = Object.fromEntries(Object.entries(lib).filter(([k]) => !(k in (S.settings.custom_roles || {}))));
+    if (Object.keys(missing).length) settings.custom_roles = missing;
+    if (cfg && !S.games_played){
+      CONFIG_KEYS.forEach(k => { if (k in cfg && !(S.me.narrator && k === 'host_voice')) settings[k] = cfg[k]; });
+      if (cfg.roles_custom && cfg.roles) settings.roles = cfg.roles;
+    }
+    if (Object.keys(settings).length) send({type:'settings', settings});
+    if (cfg?.bots && !bots && !pendingBots) send({type:'bots', op:'fill', n: S.players.length + cfg.bots});
+    if (cfg && !S.games_played) toast('✓ Đã dùng lại cấu hình lần trước');
+    return;
+  }
+  const cfg = {roles: S.settings.roles, roles_custom: S.roles_custom, bots};
+  CONFIG_KEYS.forEach(k => cfg[k] = S.settings[k]);
+  save('masoi_last_config', cfg);
+}
+
 function playerChips(){
   const ready = S.next_ready?.ids || [];
   return `<div class="chips">${S.players.map(p => `<span class="chip ${p.connected ? '' : 'off'}">
@@ -537,6 +639,7 @@ function renderPlayerLobby(){
     ${S.narrator ? `<p class="muted" style="margin-top:12px">🎙️ Quản trò: ${esc(S.narrator.name)}${S.narrator.connected ? '' : ' (mất kết nối)'}</p>` : ''}
     <div class="section"><h3>Người chơi cùng phòng</h3><span class="meta">${r.count}/${r.total} sẵn sàng</span></div>
     ${playerChips()}
+    ${leaderboardHtml(false)}
     <div style="margin-top:24px">
       <button class="btn ${r.me ? '' : 'primary'}" data-do="ready_next">${r.me ? '✓ Đã sẵn sàng (bấm để huỷ)' : '✋ Sẵn sàng'}</button>
       <p class="muted" style="text-align:center;margin:8px 0 4px;font-size:14px">Chủ phòng sẽ bắt đầu ván. Các vai trong ván được giữ bí mật.</p>
@@ -550,14 +653,15 @@ function renderLobby(){
   const host = S.me.is_host, n = S.players.length, r = S.settings.roles;
   const creator = (r.creator || 0) > 0, need = n + (creator ? S.limits.creator_extra : 0);
   const total = Object.values(r).reduce((x, y) => x + y, 0), specials = total - (r.villager || 0);
-  const wolves = WOLF_CARDS.reduce((x, k) => x + (r[k] || 0), 0);
+  const wolves = WOLF_CARDS.reduce((x, k) => x + (r[k] || 0), 0)
+    + Object.entries(S.settings.custom_roles || {}).reduce((x, [k, d]) => x + (d.team === 'wolves' ? (r[k] || 0) : 0), 0);
   let problem = '';
   if (n < S.limits.min) problem = `Cần thêm ${S.limits.min - n} người nữa`;
   else if (specials > need) problem = `Đang chọn ${specials} vai đặc biệt cho ${need} chỗ – hãy bớt ${specials - need} vai`;
   else if (wolves < 1) problem = 'Cần ít nhất 1 lá phe Sói';
   else if (wolves >= n - wolves) problem = 'Sói đang ngang hoặc đông hơn Dân';
   const roleCard = k => {
-    const R = ROLE[k], on = (r[k] || 0) > 0;
+    const R = RI(k), on = (r[k] || 0) > 0;
     if (k === 'werewolf') return `<div class="rcard on"><span class="ricon">${R.icon}</span>
       <div class="rinfo"><b>${R.name}</b><small>${R.desc}</small></div>
       ${host ? `<div class="stepper"><button data-role="werewolf" data-d="-1" aria-label="Bớt Ma Sói">−</button>
@@ -599,11 +703,14 @@ function renderLobby(){
     ${S.narrator ? `<p class="muted" style="margin-top:12px">🎙️ Quản trò: ${esc(S.narrator.name)}${S.narrator.connected ? '' : ' (mất kết nối)'}</p>` : ''}
     <div class="section"><h3>Người chơi</h3><span class="meta">✓ ${S.next_ready?.count || 0}/${S.next_ready?.total || 0} người thật sẵn sàng</span></div>
     ${playerChips()}
+    ${leaderboardHtml(false)}
 
     <div class="section"><h3>Vai trong ván</h3><span class="meta">${S.roles_custom ? 'Tự chọn' : 'Tự động theo số người'}</span></div>
     ${host ? `<div class="presets"><button data-do="auto">Gợi ý theo số người</button>
       <button data-do="basic">Chỉ vai cơ bản</button><button data-do="allroles">Bật tất cả</button></div>` : ''}
     ${roleSection}
+    ${customSection()}
+    <div class="presets" style="margin-top:12px"><button data-do="defaults">↺ Dùng cấu hình mặc định</button></div>
     <div class="total ${problem ? 'bad' : 'ok'}">${problem || `${n} người: ${specials} vai đặc biệt + ${r.villager || 0} Dân Làng${creator ? ' (đã tính 2 lá dư cho Kẻ Sáng Tạo)' : ''}. Sẵn sàng.`}</div>
 
     <div class="opt"><span>Kẻ Sáng Tạo chọn lá</span>${seg('creator_seconds', [20,30,45], v => `${v}s`)}</div>
@@ -630,7 +737,7 @@ function renderGame(){
   const a = S.action;
   const timerLabel = S.deadline ? `<span class="timer js-timer"></span>` : '';
   app.innerHTML = `
-    <div class="bar"><div><h2>${PHASE[ph]}</h2><span class="meta">${night ? 'Đêm' : 'Ngày'} ${Math.max(1, S.day)}</span></div>${timerLabel}</div>
+    <div class="bar"><div><h2>${phaseLabel(ph)}</h2><span class="meta">${night ? 'Đêm' : 'Ngày'} ${Math.max(1, S.day)}</span></div>${timerLabel}</div>
     ${!S.me.alive && !a ? `<div class="dead-banner">💀 Bạn đã chết. Hãy giữ im lặng, không ra hiệu cho ai.</div>` : ''}
     ${S.me.alive && S.silenced === S.me.id && !night ? `<div class="dead-banner">🤐 Bạn bị phù phép – không được nói trong buổi thảo luận hôm nay. Vẫn được bỏ phiếu.</div>` : ''}
     ${S.me.is_host && S.settings.host_voice && !audioReady ? `<button class="btn primary" data-do="unlock" style="margin-bottom:14px">🔊 Chạm để bật giọng quản trò</button>` : ''}
@@ -651,7 +758,7 @@ function renderPassive(){
     <div class="stage"><div class="big">🃏</div><h2>Đang chia bài</h2><p>Kẻ Sáng Tạo đang chọn vai. Chờ một chút nhé.</p></div>`;
   if (ph.startsWith('night')) return `
     <div class="stage"><div class="big">🌙</div><h2>Hãy nhắm mắt</h2>
-      <p>${PHASE[ph]}. Đặt điện thoại úp xuống, đừng nhìn người khác.</p></div>`;
+      <p>${phaseLabel(ph)}. Đặt điện thoại úp xuống, đừng nhìn người khác.</p></div>`;
   if (ph === 'dawn' || ph === 'verdict') {
     const recent = S.log.slice(-4).filter(l => !l.text.startsWith('🌙')).map(l => esc(l.text)).join('<br>');
     return `<div class="headline">${recent || esc(last)}</div>`;
@@ -681,7 +788,7 @@ function chatter(){
 function board(){
   return `<div class="grid">${S.players.map(p => `<div class="pcard ${p.alive ? '' : 'dead'}">
     <span class="av">${esc(initials(p.name))}</span><span class="pn">${esc(p.name.replace('🤖 ', ''))}${p.id === S.silenced ? ' 🤐' : ''}</span>
-    ${p.role && !p.alive ? `<span class="who">${ROLE[p.role].name}</span>` : ''}</div>`).join('')}</div>`;
+    ${p.role && !p.alive ? `<span class="who">${RI(p.role).name}</span>` : ''}</div>`).join('')}</div>`;
 }
 
 function voteCounts(){
@@ -723,7 +830,7 @@ function confirmBar(a, K){
 }
 
 function renderAction(a){
-  const K = KIND[a.kind] || {};
+  const K = KIND[a.kind] || {t: a.title, d: a.desc, btn: a.verb, rt: a.title, danger: a.danger};
   if (a.info) return `<div class="panel"><h2>${K.t}</h2><div class="result">${esc(a.info)}</div>
     <button class="btn primary" data-ack="${a.ack}">Đã hiểu, nhắm mắt</button></div>`;
   if (a.result) return `<div class="panel"><h2>${K.rt}</h2><div class="result">${esc(a.result)}</div>
@@ -731,7 +838,7 @@ function renderAction(a){
   if (a.kind === 'creator') return `<div class="panel"><h2>✨ Kẻ Sáng Tạo</h2>
     <p>Hai lá bài dư ra. Chọn một lá làm vai của bạn trong ván này.</p>
     <div class="choices">${a.options.map(k => `<button class="rcard" data-ack="creator_pick" data-target="${k}">
-      <span class="ricon">${ROLE[k].icon}</span><div class="rinfo"><b>${ROLE[k].name}</b><small>${ROLE[k].desc}</small></div></button>`).join('')}</div></div>`;
+      <span class="ricon">${RI(k).icon}</span><div class="rinfo"><b>${RI(k).name}</b><small>${RI(k).desc}</small></div></button>`).join('')}</div></div>`;
   if (a.kind === 'witch') return renderWitch(a);
 
   let desc = K.d || '', extra = null, bottom = '';
@@ -777,11 +884,12 @@ function teamOf(){
   if (k === 'mutant_wolf') return ['Đêm đầu là Dân – sắp hoá sói', 't-wolf'];
   if (k === 'cloner') return ['Chưa có phe', 't-third'];
   if (k === 'creator') return ['Đang chọn vai', 't-third'];
+  if (S.role_defs?.[k]) return S.role_defs[k].team === 'wolves' ? ['Phe Ma Sói', 't-wolf'] : ['Phe Dân Làng', 't-village'];
   return ['Phe Dân Làng', 't-village'];
 }
 
 function renderReveal(){
-  const R = ROLE[S.me.role]; if (!R) return '';
+  const R = RI(S.me.role); if (!R) return '';
   const [team, cls] = teamOf();
   return `<div class="reveal ${revealing ? 'show' : ''}" id="reveal">
     <div class="big">${R.icon}</div><h2>${R.name}</h2>
@@ -798,13 +906,38 @@ function renderEnd(){
       <h2 class="${wolves ? 't-wolf' : 't-village'}">${wolves ? 'Phe Ma Sói thắng' : 'Phe Dân Làng thắng'}</h2>
       <p class="muted">Sau ${S.day} đêm</p></div>
     ${nextPanel()}
-    <div class="section"><h3>Người chơi và vai trò</h3><span class="meta">${S.players.filter(p => p.alive).length} người sống sót</span></div>
-    <div class="roster">${S.players.map(p => `<div class="${p.alive ? '' : 'dead'}">
-      <span>${p.alive ? '🙂' : '💀'} ${esc(p.name)}${p.id === S.me.id ? ' (bạn)' : ''}</span>
-      <span>${ROLE[p.role]?.icon || ''} ${ROLE[p.role]?.name || ''}</span></div>`).join('')}</div>
+    ${resultHtml()}
+    ${leaderboardHtml(true)}
     ${recapHtml()}
     ${S.me.narrator ? `<div class="narr-tools"><button class="btn" data-do="replay_recap">🔊 Đọc lại diễn biến</button>
       <button class="btn" data-do="mute">${muted ? '🔈 Bật tiếng' : '🔇 Tắt tiếng'}</button></div>` : ''}`;
+}
+
+const SCORE_RULES = 'Phe thắng: mỗi người +1 điểm, kể cả đã chết trong đêm. Bị dân làng treo cổ ban ngày: không được điểm ván đó.';
+
+function resultHtml(){
+  const rows = S.last_result || [];
+  if (!rows.length) return '';
+  const alive = rows.filter(r => r.alive).length;
+  return `<div class="section"><h3>Người chơi, vai trò và điểm</h3><span class="meta">${alive} người sống sót</span></div>
+    <p class="rules">${SCORE_RULES}</p>
+    <table class="score"><tr><th></th><th>Người chơi</th><th>Điểm</th></tr>
+    ${rows.map(r => `<tr class="${r.id === S.me.id ? 'me' : ''}">
+      <td>${r.lynched ? '⚖️' : r.alive ? '🙂' : '💀'}</td>
+      <td class="n">${esc(r.name)}${r.id === S.me.id ? ' (bạn)' : ''}<small>${RI(r.role)?.icon || ''} ${RI(r.role)?.name || ''} · ${r.team === 'wolves' ? 'phe Sói' : 'phe Dân'} · ${esc(r.reason)}</small></td>
+      <td class="gain ${r.gain ? 'plus' : ''}">${r.gain ? '+' + r.gain : '0'}</td></tr>`).join('')}</table>`;
+}
+
+function leaderboardHtml(open){
+  const rows = S.scores || [];
+  if (!rows.length) return '';
+  const medal = k => ['🥇', '🥈', '🥉'][k - 1] || k;
+  const body = `<p class="rules">${SCORE_RULES}</p>
+    <table class="score"><tr><th>#</th><th>Người chơi</th><th>Điểm</th><th>Ván</th><th>Thắng</th><th>Bị treo</th></tr>
+    ${rows.map(r => `<tr class="${r.name === S.me.name ? 'me' : ''}"><td>${medal(r.rank)}</td><td class="n">${esc(r.name)}</td>
+      <td><b>${r.points}</b></td><td>${r.games}</td><td>${r.wins}</td><td>${r.lynched}</td></tr>`).join('')}</table>
+    ${S.me.is_host ? '<button class="btn" data-do="reset_scores" style="margin-top:12px">🗑️ Xoá bảng xếp hạng</button>' : ''}`;
+  return `<details class="scripts" ${open ? 'open' : ''}><summary>🏆 Bảng xếp hạng sau ${S.games_played} ván</summary>${body}</details>`;
 }
 
 function nextPanel(){
@@ -837,7 +970,7 @@ function renderNarrator(){
   const icon = night ? '🌙' : ph === 'hunter_shot' ? '🏹' : ph === 'day_vote' || ph === 'verdict' ? '⚖️' : '☀️';
   const alive = S.players.filter(p => p.alive).length;
   app.innerHTML = `
-    <div class="narr-stage"><div class="big">${icon}</div><h2>${PHASE[ph]}</h2>
+    <div class="narr-stage"><div class="big">${icon}</div><h2>${phaseLabel(ph)}</h2>
       <span class="meta">${night ? 'Đêm' : 'Ngày'} ${Math.max(1, S.day)}, còn ${alive}/${S.players.length} người sống</span>
       <div class="narr-timer js-timer"></div></div>
     <div class="subtitle" id="subtitle">${esc(currentLine || '…')}</div>
@@ -857,7 +990,7 @@ function renderNarrator(){
     <div class="reveal ${revealing ? 'show' : ''}" id="reveal" style="justify-content:flex-start;overflow:auto">
       <h2 style="font-size:28px">Bài của mọi người</h2>
       <div class="roster" style="width:100%;max-width:420px;text-align:left">${S.players.map(p => `<div class="${p.alive ? '' : 'dead'}">
-        <span>${esc(p.name)}</span><span>${ROLE[p.role]?.icon || ''} ${ROLE[p.role]?.name || ''}</span></div>`).join('')}</div></div>
+        <span>${esc(p.name)}</span><span>${RI(p.role)?.icon || ''} ${RI(p.role)?.name || ''}</span></div>`).join('')}</div></div>
     ${!audioReady && !muted ? `<div class="unlock"><div class="big" style="font-size:64px">🔊</div>
       <h2>Chạm để bật giọng quản trò</h2><p class="muted">Trình duyệt cần bạn chạm một lần mới cho phát âm thanh.</p>
       <button class="btn primary" data-do="unlock" style="max-width:320px">Bật âm thanh</button></div>` : ''}`;
@@ -932,6 +1065,18 @@ app.addEventListener('click', async e => {
     ta.focus(); ta.selectionStart = ta.selectionEnd = at + tag.length;
     saveScript(b.dataset.for, ta.value); return;
   }
+  if (b.dataset.cedit){
+    const d = S.settings.custom_roles[b.dataset.cedit];
+    editingRole = {id: b.dataset.cedit, ...d, uses: String(d.uses), start_night: String(d.start_night)}; render(); return;
+  }
+  if (b.dataset.cn){
+    const roles = {...S.settings.roles}, k = b.dataset.cn;
+    roles[k] = Math.max(0, Math.min(5, (roles[k] || 0) + Number(b.dataset.d)));
+    send({type:'settings', settings:{roles}}); return;
+  }
+  if (b.dataset.crt && editingRole){ editingRole[b.dataset.crt] = !editingRole[b.dataset.crt]; render(); return; }
+  if (b.dataset.crteam && editingRole){ editingRole.team = b.dataset.crteam; render(); return; }
+  if (b.dataset.cri && editingRole){ editingRole.icon = b.dataset.cri; render(); return; }
   if (b.dataset.fill){ send({type:'bots', op:'fill', n:Number(b.dataset.fill)}); return; }
   if (b.dataset.rate){ rate = Number(b.dataset.rate); save('masoi_rate', rate); render(); return; }
   if (b.dataset.set){ send({type:'settings', settings:{[b.dataset.set]: Number(b.dataset.v)}}); return; }
@@ -1006,6 +1151,26 @@ app.addEventListener('click', async e => {
       case 'start': send({type:'start'}); return;
       case 'restart': stopSpeech(); send({type:'restart'}); return;
       case 'new_game': stopSpeech(); send({type:'new_game'}); return;
+      case 'reset_scores':
+        if (confirm('Xoá toàn bộ bảng xếp hạng của phòng?')) send({type:'reset_scores'});
+        return;
+      case 'cr_new':
+        editingRole = {id:null, name:'', icon:'⭐', team:'village', action:'protect', uses:'0', start_night:'1',
+                       no_repeat:false, tough:false, revenge:false, seen_as:'', desc:'', call:''};
+        render(); return;
+      case 'cr_cancel': editingRole = null; render(); return;
+      case 'cr_save': saveCustomRole(); render(); return;
+      case 'cr_delete': {
+        const id = editingRole.id;
+        if (!confirm('Xoá vai này khỏi phòng và khỏi máy?')) return;
+        const lib = crLib(); delete lib[id]; save('masoi_custom_roles', lib);
+        send({type:'settings', settings:{custom_roles:{[id]: null}}});
+        editingRole = null; render(); return;
+      }
+      case 'defaults':
+        send({type:'settings', settings:{auto_roles:true, creator_seconds:30, wolves_seconds:20, role_seconds:5,
+          hunter_seconds:15, discuss_seconds:180, vote_seconds:60, reveal_role_on_death:true, fast_turns:true, show_votes:false}});
+        toast('Đã trả về cấu hình mặc định'); return;
       case 'show_votes': send({type:'settings', settings:{show_votes: !S.settings.show_votes}}); return;
       case 'cancel_game':
         if (confirm('Huỷ ván đang chơi? Mọi người sẽ quay lại phòng chờ.')) send({type:'cancel_game'});
@@ -1027,15 +1192,26 @@ app.addEventListener('click', async e => {
 
 app.addEventListener('toggle', e => { if (e.target.id === 'scriptEditor') editorOpen = e.target.open; }, true);
 app.addEventListener('input', e => {
+  if (e.target.dataset?.cr && editingRole){ editingRole[e.target.dataset.cr] = e.target.value; return; }
   const key = e.target.dataset?.script; if (!key) return;
   clearTimeout(saveTimer); saveTimer = setTimeout(() => saveScript(key, e.target.value), 800);
 });
 app.addEventListener('focusout', e => {
+  if (e.target.closest?.('#roleForm')){
+    // chờ một chút để cú chạm vào nút trong form không bị mất khi giao diện vẽ lại
+    setTimeout(() => { if (pendingRender && !document.activeElement?.closest?.('#roleForm')){ pendingRender = false; render(); } }, 400);
+    return;
+  }
   const key = e.target.dataset?.script; if (!key) return;
   clearTimeout(saveTimer); saveScript(key, e.target.value);
   setTimeout(() => { if (pendingRender && !document.activeElement?.dataset?.script){ pendingRender = false; render(); } }, 50);
 });
 app.addEventListener('change', e => {
+  if (e.target.dataset?.cr && editingRole){
+    editingRole[e.target.dataset.cr] = e.target.value;
+    if (e.target.tagName === 'SELECT'){ e.target.blur(); render(); }   // ô chữ: không vẽ lại để cú chạm kế tiếp không bị mất
+    return;
+  }
   if (e.target.id === 'voice'){ voiceName = e.target.value; save('masoi_voice', voiceName); unlockAudio(); }
 });
 

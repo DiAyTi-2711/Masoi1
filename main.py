@@ -217,6 +217,8 @@ async def dispatch(room: Room, pid: str, ws: WebSocket, msg: dict) -> None:
             raise GameError("Lệnh máy chơi không hợp lệ")
     elif kind == "restart":
         room.reset_to_lobby()
+    elif kind == "reset_scores":
+        room.reset_scores()
     elif kind == "cancel_game":
         room.cancel_game()
     elif kind == "new_game":

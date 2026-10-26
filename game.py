@@ -27,6 +27,11 @@ MIN_PLAYERS = 4  # để test cho tiện; chơi thật nên đặt 10
 MAX_PLAYERS = 30
 
 
+def rv(role) -> str:
+    """Mã vai dạng chuỗi – vai có sẵn (Role) hoặc vai tự tạo ("c_…")."""
+    return role.value if isinstance(role, Enum) else str(role)
+
+
 class Role(str, Enum):
     # Phe Dân Làng
     VILLAGER = "villager"
@@ -74,6 +79,7 @@ class Phase(str, Enum):
     NIGHT_MOON = "night_moon"
     NIGHT_SNOW = "night_snow"
     NIGHT_SPELL = "night_spell"
+    NIGHT_CUSTOM = "night_custom"   # lượt của một vai tự tạo
     DAWN = "dawn"
     DAY_DISCUSS = "day_discuss"
     DAY_VOTE = "day_vote"
@@ -84,7 +90,45 @@ class Phase(str, Enum):
 
 # Bị Sói Băng phong ấn thì mất lượt ở các bước này
 FREEZABLE = {Phase.NIGHT_GUARD, Phase.NIGHT_WITCH, Phase.NIGHT_SEER,
-             Phase.NIGHT_MOON, Phase.NIGHT_SPELL}
+             Phase.NIGHT_MOON, Phase.NIGHT_SPELL, Phase.NIGHT_CUSTOM}
+
+# ---------- vai tự tạo: ghép từ các "khối năng lực" mà engine hiểu được ----------
+CUSTOM_ACTIONS = {
+    "none": ("", ""),
+    "protect": ("Bảo vệ", "chọn người cần bảo vệ đêm nay"),
+    "check_team": ("Soi", "chọn người muốn soi phe"),
+    "check_role": ("Soi vai", "chọn người muốn xem vai"),
+    "kill": ("Ra tay", "chọn người muốn giết"),
+}
+CUSTOM_MAX = 12
+
+
+def clean_custom_role(rid: str, d: dict) -> dict:
+    """Làm sạch định nghĩa vai tự tạo nhận từ chủ phòng."""
+    if not re.fullmatch(r"c_[a-z0-9]{3,12}", str(rid)):
+        raise GameError("Mã vai không hợp lệ")
+    name = " ".join(str(d.get("name") or "").split())[:20]
+    if not name:
+        raise GameError("Vai tự tạo cần có tên")
+    action = d.get("action") if d.get("action") in CUSTOM_ACTIONS else "none"
+    team = "wolves" if d.get("team") == "wolves" else "village"
+    out = {
+        "name": name,
+        "icon": "".join(list(str(d.get("icon") or "⭐"))[:3]) or "⭐",
+        "desc": " ".join(str(d.get("desc") or "").split())[:160],
+        "team": team,
+        "action": action,
+        "uses": max(0, min(3, int(d.get("uses") or 0))),        # 0 = mỗi đêm
+        "start_night": max(1, min(3, int(d.get("start_night") or 1))),
+        "no_repeat": bool(d.get("no_repeat")),
+        "tough": bool(d.get("tough")),        # chịu được 1 lần sói cắn
+        "revenge": bool(d.get("revenge")),    # chết trong đêm được kéo theo 1 người
+        "seen_as": d.get("seen_as") if d.get("seen_as") in ("wolf", "village") else "",
+        "call": " ".join(str(d.get("call") or "").split())[:200],
+    }
+    if not out["call"] and action != "none":
+        out["call"] = f"{name} hãy thức dậy và {CUSTOM_ACTIONS[action][1]}."
+    return out
 
 # Câu gọi vai của quản trò
 CALLS = {
@@ -122,6 +166,7 @@ SCRIPT_DEFAULTS: dict[str, str] = {
     "thanks": "Cảm ơn mọi người đã chơi.",
     "vote_detail": "{ten} có {so_phieu} phiếu từ {nguoi_bo_phieu}.",
     "cancel": "Quản trò đã huỷ ván chơi. Mọi người quay lại phòng chờ.",
+    "ranking": "Bảng xếp hạng sau {so_van} ván: {xep_hang}.",
 }
 SCRIPT_MAX = 300
 BOT_NAMES = ["Na", "Bi", "Tôm", "Mít", "Su", "Bống", "Cốm", "Kem", "Xoài", "Đậu", "Gạo", "Mận", "Bơ", "Nho",
@@ -169,6 +214,7 @@ class Player:
     alive: bool = True
     connected: bool = False
     private_log: list[str] = field(default_factory=list)
+    death: Optional[str] = None  # "night" (chết trong đêm) hoặc "day" (bị treo cổ)
 
 
 @dataclass
@@ -184,7 +230,8 @@ class Settings:
     fast_turns: bool = True
     host_voice: bool = False     # chủ phòng (đang chơi) cũng đọc lời quản trò trên máy mình
     show_votes: bool = False     # công khai ai bỏ phiếu cho ai (mặc định: phiếu kín, chỉ thấy số phiếu)
-    scripts: dict[str, str] = field(default_factory=dict)  # lời quản trò đã sửa      # chọn xong là kết thúc lượt, không chờ hết giờ
+    scripts: dict[str, str] = field(default_factory=dict)  # lời quản trò đã sửa
+    custom_roles: dict[str, dict] = field(default_factory=dict)  # vai tự tạo: mã -> định nghĩa      # chọn xong là kết thúc lượt, không chờ hết giờ
 
 
 class GameError(Exception):
@@ -207,6 +254,9 @@ class Room:
         self.announce_seconds = 6.0
         self.jitter = (1.0, 3.0)  # giây ngẫu nhiên thêm vào mỗi lượt để khó đoán
         self._speech_id = 0
+        # Bảng xếp hạng của phòng – giữ qua các ván, theo tên người chơi
+        self.scores: dict[str, dict] = {}
+        self.games_played = 0
         self.task: asyncio.Task | None = None
         self._reset_game()
 
@@ -231,12 +281,16 @@ class Room:
         self.creator_options: list[Role] = []
         self.creator_choice: Role | None = None
         self.clone_target: str | None = None
+        self.custom_used: dict[str, int] = {}      # số lần đã dùng năng lực (vai tự tạo)
+        self.custom_last: dict[str, str] = {}      # mục tiêu đêm trước (luật không chọn trùng)
+        self.tough_used: set[str] = set()
         self.sick_next = False      # Người Bệnh vừa bị cắn chết
         self.cub_bonus = False      # Sói Con vừa chết
         self.frozen_next: str | None = None
         self.silenced: str | None = None
         self.ready_vote: set[str] = set()
         self.next_ready: set[str] = set()
+        self.last_result: list[dict] = []
         self._day_log_start = 0  # ai đã bấm "Sẵn sàng chơi tiếp" khi hết ván
         self._step_id = 0
         self.bot_mem: dict[str, dict] = {}      # trí nhớ riêng của từng máy chơi
@@ -255,6 +309,10 @@ class Room:
         self.witch_heal: str | None = None
         self.witch_poison: str | None = None
         self.spell_target: str | None = None
+        self.custom_key: str | None = None          # vai tự tạo đang được gọi (reset mỗi đêm)
+        self.custom_protect: dict[str, str] = {}
+        self.custom_kills: dict[str, str] = {}
+        self.custom_results: dict[str, str] = {}
 
     def seated(self) -> list[Player]:
         """Người chơi thật (không tính máy quản trò)."""
@@ -353,14 +411,28 @@ class Room:
         if self.phase != Phase.LOBBY:
             raise GameError("Chỉ đổi cấu hình được ở phòng chờ")
         try:
+            if isinstance(data.get("custom_roles"), dict):  # thêm / sửa / xoá (giá trị null) vai tự tạo
+                lib = dict(self.settings.custom_roles)
+                for rid, d in data["custom_roles"].items():
+                    if d is None:
+                        lib.pop(rid, None)
+                        self.settings.roles.pop(rid, None)
+                    else:
+                        lib[rid] = clean_custom_role(rid, d)
+                if len(lib) > CUSTOM_MAX:
+                    raise GameError(f"Tối đa {CUSTOM_MAX} vai tự tạo")
+                self.settings.custom_roles = lib
             if data.get("auto_roles"):
                 self.roles_custom = False
             elif isinstance(data.get("roles"), dict):
-                self.settings.roles = {
+                roles = {
                     r.value: max(0, min(1 if r in SINGLE_ROLES else MAX_PLAYERS,
                                         int(data["roles"].get(r.value, 0))))
                     for r in Role
                 }
+                for rid in self.settings.custom_roles:
+                    roles[rid] = max(0, min(5, int(data["roles"].get(rid, 0))))
+                self.settings.roles = roles
                 self.roles_custom = True
             self._auto_roles()
             limits = {"creator_seconds": (10, 90), "wolves_seconds": (10, 90),
@@ -383,7 +455,8 @@ class Room:
         total = sum(r.values())
         if total != need:
             raise GameError(f"Đang có {total} lá cho {need} chỗ – hãy bớt vai đặc biệt")
-        wolves = sum(r.get(w.value, 0) for w in WOLF_CARDS)
+        wolves = sum(r.get(w.value, 0) for w in WOLF_CARDS) + sum(
+            r.get(k, 0) for k, d in self.settings.custom_roles.items() if d["team"] == "wolves")
         if wolves < 1:
             raise GameError("Cần ít nhất 1 lá phe Sói")
         if wolves >= n - wolves:
@@ -392,7 +465,7 @@ class Room:
     async def start(self) -> None:
         self.validate_roles()
         players = self.seated()
-        cards = [Role(k) for k, c in self.settings.roles.items() for _ in range(c)]
+        cards = [self._as_role(k) for k, c in self.settings.roles.items() for _ in range(c)]
         has_creator = Role.CREATOR in cards
         if has_creator:
             cards.remove(Role.CREATOR)
@@ -408,9 +481,9 @@ class Room:
         if has_creator:
             deal = [Role.CREATOR] + deal
         for p, role in zip(players, deal):
-            p.role, p.alive, p.private_log = role, True, []
-        self._hist("Bài đã chia: " + ", ".join(f"{p.name} là {ROLE_VI[p.role]}" for p in players)
-                   + (f". Hai lá dư là {ROLE_VI[extra[0]]} và {ROLE_VI[extra[1]]}" if extra else "") + ".")
+            p.role, p.alive, p.private_log, p.death = role, True, [], None
+        self._hist("Bài đã chia: " + ", ".join(f"{p.name} là {self._rn(p.role)}" for p in players)
+                   + (f". Hai lá dư là {self._rn(extra[0])} và {self._rn(extra[1])}" if extra else "") + ".")
         self.task = asyncio.create_task(self._run())
 
     def reset_to_lobby(self) -> None:
@@ -450,7 +523,10 @@ class Room:
 
     # ------------------------------------------------------------ tiện ích
     def is_wolf(self, p: Player) -> bool:
-        """Sói Biến Chủng chỉ thành sói từ đêm thứ 2."""
+        """Sói Biến Chủng chỉ thành sói từ đêm thứ 2. Vai tự tạo phe Sói thức dậy cùng bầy."""
+        d = self._cdef(p.role)
+        if d:
+            return d["team"] == "wolves"
         if p.role == Role.MUTANT_WOLF:
             return self.day_no >= 2
         return p.role in WOLF_CARDS
@@ -478,6 +554,31 @@ class Room:
 
     def _in_game(self, role: Role) -> bool:
         return self.settings.roles.get(role.value, 0) > 0
+
+    def _cdef(self, role) -> dict | None:
+        return self.settings.custom_roles.get(rv(role)) if role is not None else None
+
+    def _rn(self, role) -> str:
+        """Tên tiếng Việt của vai (có sẵn hoặc tự tạo)."""
+        if role in ROLE_VI:
+            return ROLE_VI[role]
+        d = self._cdef(role)
+        return d["name"] if d else str(role)
+
+    def _as_role(self, key: str):
+        try:
+            return Role(key)
+        except ValueError:
+            if key in self.settings.custom_roles:
+                return key
+            raise GameError("Vai không tồn tại")
+
+    def _looks_wolf(self, p: Player) -> bool:
+        """Kết quả khi bị soi phe (vai tự tạo có thể 'giả dạng')."""
+        d = self._cdef(p.role)
+        if d and d["seen_as"]:
+            return d["seen_as"] == "wolf"
+        return self.is_wolf(p)
 
     def _name(self, pid: str | None) -> str:
         return self.players[pid].name if pid in self.players else "?"
@@ -513,15 +614,16 @@ class Room:
         if not p.alive:
             return []
         p.alive = False
+        p.death = "day" if cause == "lynch" else "night"
         if self.settings.reveal_role_on_death:
-            self._event(f"🪦 {p.name} là {ROLE_VI[p.role]}")
+            self._event(f"🪦 {p.name} là {self._rn(p.role)}")
         if p.role == Role.WOLF_CUB:
             self.cub_bonus = True
         for c in self.alive(Role.CLONER):  # Kẻ Nhân Bản nhận lá bài của mục tiêu
             if self.clone_target == pid:
                 c.role = p.role
-                self._note(c.id, f"🧬 {p.name} đã chết. Bạn nhận lá {ROLE_VI[p.role]}.")
-                self._hist(f"Kẻ Nhân Bản {c.name} nhận lá {ROLE_VI[p.role]} của {p.name}.")
+                self._note(c.id, f"🧬 {p.name} đã chết. Bạn nhận lá {self._rn(p.role)}.")
+                self._hist(f"Kẻ Nhân Bản {c.name} nhận lá {self._rn(p.role)} của {p.name}.")
                 if self.is_wolf(c):
                     self._join_pack(c, "🐺 Bạn đã thuộc phe Sói.")
         return [(pid, cause)]
@@ -582,9 +684,12 @@ class Room:
             Role.HUNTER: "🏹 Nếu chết trong đêm, bạn được kéo một người chết theo.",
         }
         for p in self.seated():
-            p.private_log.insert(0, f"Vai của bạn: {ROLE_VI[p.role]}")
+            p.private_log.insert(0, f"Vai của bạn: {self._rn(p.role)}")
             if p.role in tips:
                 self._note(p.id, tips[p.role])
+            cd = self._cdef(p.role)
+            if cd and cd["desc"]:
+                self._note(p.id, f"{cd['icon']} {cd['desc']}")
             if self.is_wolf(p):
                 self._note(p.id, f"🐺 Đồng đội sói: {self._pack_names(p.id)}")
 
@@ -632,7 +737,21 @@ class Room:
             # vai đã chết / lá dư: vẫn gọi, chờ một khoảng như người thật đang chọn
             await self._step(phase, full, set(),
                              wait=lead + random.uniform(min(self.jitter[1], seconds), seconds))
-        self._say(self._t("sleep", vai=ROLE_VI[role]))
+        self._say(self._t("sleep", vai=self._rn(role)))
+
+    async def _call_custom(self, key: str, d: dict, seconds: float, actors: set[str]) -> None:
+        """Gọi một vai tự tạo – cùng nhịp với vai có sẵn (gọi dậy, chờ, đi ngủ)."""
+        self._say(self._t(f"call_{key}") if f"call_{key}" in self.settings.scripts else d["call"])
+        lead, full = self.call_seconds, self.call_seconds + seconds
+        if not self.settings.fast_turns:
+            await self._step(Phase.NIGHT_CUSTOM, full, actors)
+        elif actors:
+            await self._step(Phase.NIGHT_CUSTOM, full, actors, early=True,
+                             min_seconds=lead + random.uniform(*self.jitter))
+        else:
+            await self._step(Phase.NIGHT_CUSTOM, full, set(),
+                             wait=lead + random.uniform(min(self.jitter[1], seconds), seconds))
+        self._say(self._t("sleep", vai=d["name"]))
 
     def _finish_step(self) -> None:
         self.actors = set()
@@ -678,8 +797,8 @@ class Room:
                     choice = self.creator_choice or random.choice(self.creator_options)
                     other = [r for r in self.creator_options if r != choice] or [choice]
                     creator.role = choice
-                    self._note(creator.id, f"✨ Bạn là Kẻ Sáng Tạo và đã chọn vai {ROLE_VI[choice]}.")
-                    self._hist(f"Kẻ Sáng Tạo {creator.name} chọn lá {ROLE_VI[choice]}, bỏ lá {ROLE_VI[other[0]]}"
+                    self._note(creator.id, f"✨ Bạn là Kẻ Sáng Tạo và đã chọn vai {self._rn(choice)}.")
+                    self._hist(f"Kẻ Sáng Tạo {creator.name} chọn lá {self._rn(choice)}, bỏ lá {self._rn(other[0])}"
                                + ("" if self.creator_choice else " (hết giờ, máy chọn ngẫu nhiên)") + ".")
             self._intros()
             if self._in_game(Role.CLONER):
@@ -717,9 +836,19 @@ class Room:
                             (Phase.NIGHT_SPELL, Role.SPELLCASTER)):
             if self._in_game(role):
                 await self._call(phase, st.role_seconds, ids(role))
+        for key, d in self.settings.custom_roles.items():
+            if d["action"] == "none" or self.settings.roles.get(key, 0) <= 0 or self.day_no < d["start_night"]:
+                continue
+            holders = {p.id for p in self.alive()
+                       if p.role == key and (not d["uses"] or self.custom_used.get(p.id, 0) < d["uses"])}
+            self.custom_key = key
+            await self._call_custom(key, d, st.role_seconds, holders)
+        self.custom_key = None
 
     async def _dawn(self) -> bool:
         protected = {x: by for x, by in ((self.guard_target, "Bảo Vệ"), (self.moon_shield, "Nguyệt Nữ")) if x}
+        for t, by in self.custom_protect.items():
+            protected.setdefault(t, by)
         deaths: dict[str, str] = {}
         for t in self.wolf_targets:
             if t in protected:
@@ -732,6 +861,12 @@ class Room:
                 self._hist(f"{self._name(t)} được Phù Thủy cứu sống.")
                 continue
             v = self.players[t]
+            vd = self._cdef(v.role)
+            if vd and vd["tough"] and t not in self.tough_used:  # chịu được 1 lần cắn
+                self.tough_used.add(t)
+                self._note(t, f"💪 Đêm {self.day_no}: sói cắn bạn nhưng bạn vẫn trụ được. Lần sau thì không.")
+                self._hist(f"{v.name} ({vd['name']}) bị sói cắn nhưng trụ được.")
+                continue
             if v.role == Role.CURSED:
                 v.role = Role.WEREWOLF
                 self._join_pack(v, "🌗 Bạn bị sói cắn và đã hoá thành Ma Sói!")
@@ -744,6 +879,10 @@ class Room:
                 self._witch_note(f"☠️ {self._name(self.witch_poison)} đã chết vì sói – bình độc được hoàn lại.")
             else:
                 deaths[self.witch_poison] = "poison"
+        for t, by in self.custom_kills.items():
+            if t not in deaths and self.players[t].alive:
+                deaths[t] = "kill"
+                self._hist(f"{self._name(t)} bị {by} ra tay giết.")
         self.last_guarded = self.guard_target
 
         order = list(deaths)
@@ -753,12 +892,12 @@ class Room:
         if order:
             names = self._names(order)
             self._event(f"☀️ Trời sáng. Đêm qua {names} đã chết.")
-            roles = " ".join(self._t("reveal", ten=self._name(d), vai=ROLE_VI[self.players[d].role])
+            roles = " ".join(self._t("reveal", ten=self._name(d), vai=self._rn(self.players[d].role))
                              for d in order) if reveal else ""
             self._say(f"{self._t('dawn_deaths', nguoi_chet=names)} {roles}".strip())
             for d in order:
-                self._hist(f"{self._name(d)} ({ROLE_VI[self.players[d].role]}) chết vì "
-                           + ("bị sói cắn." if deaths[d] == "wolf" else "bình độc của Phù Thủy."))
+                self._hist(f"{self._name(d)} ({self._rn(self.players[d].role)}) chết vì "
+                           + ({"wolf": "bị sói cắn.", "poison": "bình độc của Phù Thủy."}.get(deaths[d], "bị ra tay trong đêm.")))
         else:
             self._event("☀️ Trời sáng. Đêm qua bình yên, không ai chết.")
             self._say(self._t("dawn_peace"))
@@ -775,8 +914,14 @@ class Room:
             self._say(self._t("silenced", ten=self._name(self.silenced)))
         await self._announce(Phase.DAWN)
 
-        for pid, _ in killed:  # Thợ Săn chết trong đêm được bắn
-            if self.players[pid].role == Role.HUNTER:
+        for pid, _ in killed:  # Thợ Săn (và vai tự tạo "kéo theo") chết trong đêm được bắn
+            cd = self._cdef(self.players[pid].role)
+            if cd and cd["revenge"]:
+                if pid == self.frozen:
+                    self._hist(f"{self._name(pid)} bị phong ấn nên không kéo theo được ai.")
+                else:
+                    await self._hunter(pid, cd["name"])
+            elif self.players[pid].role == Role.HUNTER:
                 if pid == self.frozen:
                     self._hist(f"Thợ Săn {self._name(pid)} bị phong ấn nên không bắn được.")
                 else:
@@ -819,7 +964,7 @@ class Room:
                 self._say(self._t("vote_detail", ten=who, so_phieu=len(names), nguoi_bo_phieu=self._names_list(names)))
         if target:
             n = sum(1 for t in self.day_votes.values() if t == target)
-            role = ROLE_VI[self.players[target].role]
+            role = self._rn(self.players[target].role)
             self._event(f"⚖️ Dân làng đã treo cổ {self._name(target)}.")
             self._say(self._t("lynch", so_phieu=n, ten=self._name(target))
                       + (" " + self._t("reveal", ten=self._name(target), vai=role)
@@ -848,24 +993,25 @@ class Room:
             return None
         return leaders[0]
 
-    async def _hunter(self, pid: str) -> None:
+    async def _hunter(self, pid: str, label: str | None = None) -> None:
         self.hunter_shooter, self.hunter_target = pid, None
-        self._event(f"🏹 {self._name(pid)} là Thợ Săn và được kéo một người chết theo!")
-        self._say(self._t("hunter_call", ten=self._name(pid)))
+        self._event(f"🏹 {self._name(pid)} là {label or 'Thợ Săn'} và được kéo một người chết theo!")
+        self._say(self._t("hunter_call", ten=self._name(pid)) if not label
+                  else f"{self._name(pid)} là {label}. Hãy chọn một người để kéo theo.")
         await self._step(Phase.HUNTER_SHOT, self.settings.hunter_seconds, {pid}, early=True)
         t = self.hunter_target
         if t and self.players[t].alive:
-            role = ROLE_VI[self.players[t].role]
+            role = self._rn(self.players[t].role)
             self._event(f"💥 Thợ Săn đã bắn {self._name(t)}.")
             self._say(self._t("hunter_shot", ten=self._name(t))
                       + (" " + self._t("reveal", ten=self._name(t), vai=role)
                          if self.settings.reveal_role_on_death else ""))
-            self._hist(f"Thợ Săn {self._name(pid)} bắn chết {self._name(t)} ({role}).")
+            self._hist(f"{label or 'Thợ Săn'} {self._name(pid)} bắn chết {self._name(t)} ({role}).")
             self._kill(t, "hunter")
         else:
             self._event("Thợ Săn đã hạ súng, không bắn ai.")
             self._say(self._t("hunter_skip"))
-            self._hist(f"Thợ Săn {self._name(pid)} không bắn ai.")
+            self._hist(f"{label or 'Thợ Săn'} {self._name(pid)} không kéo theo ai.")
         self.hunter_shooter = None
         await self._announce(Phase.VERDICT)
 
@@ -874,6 +1020,11 @@ class Room:
         won = "Phe Dân Làng" if self.winner == "village" else "Phe Ma Sói"
         self._event(("🏆 " if self.winner == "village" else "🐺 ") + f"{won} chiến thắng!")
         self._say(self._t("end", phe_thang=won))
+        self._score_game()
+        top = self.leaderboard()[:3]
+        if top:
+            self._say(self._t("ranking", so_van=self.games_played, xep_hang=", ".join(
+                f"hạng {r['rank']} là {r['name']} với {r['points']} điểm" for r in top)))
         period = None
         for h in self.history:
             if h["period"] != period:
@@ -882,6 +1033,58 @@ class Room:
             self._say(h["text"])
         self._say(self._t("thanks"))
         await self._broadcast(self)
+
+    # ------------------------------------------------------------ tính điểm
+    POINTS_PER_WIN = 1
+
+    def _team(self, p: Player) -> str:
+        """Phe lúc kết thúc ván (đã tính Kẻ Bị Nguyền hoá sói, Kẻ Nhân Bản nhận vai…)."""
+        d = self._cdef(p.role)
+        if d:
+            return d["team"]
+        return "wolves" if (p.role in WOLF_CARDS or p.role == Role.TRAITOR) else "village"
+
+    def _score_game(self) -> None:
+        """Phe thắng được điểm, kể cả người đã chết trong đêm. Bị treo cổ ban ngày: không tính điểm."""
+        self.games_played += 1
+        self.last_result = []
+        for p in self.seated():
+            won = self._team(p) == self.winner
+            lynched = p.death == "day"
+            gain = self.POINTS_PER_WIN if (won and not lynched) else 0
+            if won and lynched:
+                reason = "Phe thắng nhưng bị treo cổ – không tính điểm"
+            elif won and p.alive:
+                reason = "Phe thắng, sống sót"
+            elif won:
+                reason = "Phe thắng, chết trong đêm vẫn được tính"
+            else:
+                reason = "Phe thua"
+            st = self.scores.setdefault(p.name, {"name": p.name, "bot": p.bot, "points": 0,
+                                                 "games": 0, "wins": 0, "lynched": 0})
+            st["games"] += 1
+            st["points"] += gain
+            st["wins"] += int(won)
+            st["lynched"] += int(lynched)
+            self.last_result.append({"id": p.id, "name": p.name, "role": rv(p.role),
+                                     "team": self._team(p), "won": won, "lynched": lynched,
+                                     "alive": p.alive, "gain": gain, "reason": reason})
+
+    def leaderboard(self) -> list[dict]:
+        rows = sorted(self.scores.values(),
+                      key=lambda r: (-r["points"], -r["wins"], r["lynched"], r["games"], r["name"]))
+        out, prev, rank = [], None, 0
+        for k, r in enumerate(rows):
+            key = (r["points"], r["wins"], r["lynched"])
+            if key != prev:
+                rank, prev = k + 1, key
+            out.append({**r, "rank": rank})
+        return out
+
+    def reset_scores(self) -> None:
+        if self.phase not in (Phase.LOBBY, Phase.ENDED):
+            raise GameError("Chỉ xoá bảng điểm khi không có ván đang chơi")
+        self.scores, self.games_played = {}, 0
 
     # ------------------------------------------------------------ hành động
     async def handle_action(self, pid: str, action: str, target=None) -> None:
@@ -917,9 +1120,9 @@ class Room:
             return
 
         if ph == Phase.NIGHT_CREATOR and action == "creator_pick":
-            if target not in [r.value for r in self.creator_options]:
+            if target not in [rv(r) for r in self.creator_options]:
                 raise GameError("Hãy chọn một trong hai lá")
-            self.creator_choice = Role(target)
+            self.creator_choice = self._as_role(target)
             self._done(pid)
 
         elif ph == Phase.NIGHT_CLONER and action == "clone":
@@ -983,7 +1186,7 @@ class Room:
             self._need_alive(target)
             if target == pid:
                 raise GameError("Không thể tự soi mình")
-            wolf = self.is_wolf(self.players[target])  # Kẻ Phản Bội, Kẻ Bị Nguyền chưa hoá: phe Dân
+            wolf = self._looks_wolf(self.players[target])  # Kẻ Phản Bội, Kẻ Bị Nguyền chưa hoá: phe Dân
             self.seer_result = f"{self._name(target)} thuộc {'PHE SÓI 🐺' if wolf else 'phe Dân Làng'}"
             self._note(pid, f"🔮 Đêm {self.day_no}: {self.seer_result}")
             self._hist(f"Tiên Tri {p.name} soi {self._name(target)}: {'phe Sói' if wolf else 'phe Dân'}.")
@@ -997,7 +1200,7 @@ class Room:
             if action == "moon_check":
                 if target == pid:
                     raise GameError("Không thể tự soi mình")
-                role = ROLE_VI[self.players[target].role]
+                role = self._rn(self.players[target].role)
                 self.moon_result = f"{self._name(target)} là {role}"
                 self._note(pid, f"🌙 Đêm {self.day_no}: {self.moon_result}")
                 self._hist(f"Nguyệt Nữ {p.name} soi {self._name(target)}: {role}.")
@@ -1019,6 +1222,44 @@ class Room:
                 self.frozen_next = target
                 self._hist(f"Sói Băng {p.name} phong ấn {self._name(target)} cho đêm sau.")
             self._note(pid, f"❄️ Đêm {self.day_no}: bạn phong ấn {self._name(target)} (có hiệu lực đêm sau)")
+            self._done(pid)
+
+        elif ph == Phase.NIGHT_CUSTOM and action == "custom_act":
+            d = self._cdef(self.custom_key)
+            if not d or p.role != self.custom_key:
+                raise GameError("Không phải lượt của bạn")
+            if pid in self.custom_results:
+                raise GameError("Bạn đã dùng năng lực đêm nay")
+            self._need_alive(target)
+            act = d["action"]
+            if act != "protect" and target == pid:
+                raise GameError("Hãy chọn người khác")
+            if d["no_repeat"] and self.custom_last.get(pid) == target:
+                raise GameError("Không được chọn một người hai đêm liền")
+            self.custom_last[pid] = target
+            self.custom_used[pid] = self.custom_used.get(pid, 0) + 1
+            tname = self._name(target)
+            if act == "protect":
+                self.custom_protect[target] = d["name"]
+                self.custom_results[pid] = ""
+                self._note(pid, f"{d['icon']} Đêm {self.day_no}: bạn bảo vệ {tname}")
+                self._hist(f"{d['name']} {p.name} bảo vệ {tname}.")
+                self._done(pid)
+            elif act == "kill":
+                self.custom_kills[target] = d["name"]
+                self.custom_results[pid] = ""
+                self._note(pid, f"{d['icon']} Đêm {self.day_no}: bạn ra tay với {tname}")
+                self._hist(f"{d['name']} {p.name} ra tay với {tname}.")
+                self._done(pid)
+            else:
+                if act == "check_team":
+                    res = f"{tname} thuộc {'PHE SÓI 🐺' if self._looks_wolf(self.players[target]) else 'phe Dân Làng'}"
+                else:
+                    res = f"{tname} là {self._rn(self.players[target].role)}"
+                self.custom_results[pid] = res
+                self._note(pid, f"{d['icon']} Đêm {self.day_no}: {res}")
+                self._hist(f"{d['name']} {p.name} soi: {res}.")
+        elif ph == Phase.NIGHT_CUSTOM and action == "custom_ack":
             self._done(pid)
 
         elif ph == Phase.NIGHT_SPELL and action == "silence":
@@ -1120,6 +1361,16 @@ class Room:
         if kind == "hunter":
             pool = [t for t in targets if t in known or self.public_claims.get(t)] or targets
             return "hunter_shoot", random.choice(pool)
+        if kind == "custom":
+            if a["action"] in ("check_team", "check_role"):
+                fresh = [t for t in targets if t not in mem["checked"]]
+                t = random.choice(fresh or targets)
+                if a["action"] == "check_team":
+                    mem["checked"][t] = self._looks_wolf(self.players[t])
+                return "custom_act", t
+            if a["action"] == "kill" and not self.is_wolf(p):
+                return "custom_act", random.choice([t for t in targets if t in known] or targets)
+            return "custom_act", random.choice(targets)
         return a["act"], random.choice(targets)
 
     def _bot_vote(self, p: Player, targets: list[str], known: list[str]):
@@ -1188,7 +1439,7 @@ class Room:
             if (ended or o.id == pid or me.narrator
                     or (not o.alive and self.settings.reveal_role_on_death)
                     or (self.is_wolf(me) and self.is_wolf(o))):
-                return o.role.value
+                return rv(o.role)
             return None
 
         narr = self.narrator
@@ -1200,7 +1451,7 @@ class Room:
             "deadline": self.deadline,
             "server_now": time.time(),
             "me": {"id": me.id, "name": me.name, "is_host": me.is_host, "alive": me.alive,
-                   "narrator": me.narrator, "role": me.role.value if me.role else None,
+                   "narrator": me.narrator, "role": rv(me.role) if me.role else None,
                    "wolf": self.is_wolf(me) if me.role else False},
             "narrator": {"name": narr.name, "connected": narr.connected} if narr else None,
             "players": [{"id": o.id, "name": o.name, "alive": o.alive, "bot": o.bot,
@@ -1208,7 +1459,8 @@ class Room:
                          "role": visible_role(o)} for o in self.seated()],
             # chỉ chủ phòng / máy quản trò biết cấu hình vai
             "settings": {**asdict(self.settings), "roles": self.settings.roles if me.is_host else {},
-                         "scripts": self.settings.scripts if me.is_host else {}},
+                         "scripts": self.settings.scripts if me.is_host else {},
+                         "custom_roles": self.settings.custom_roles if me.is_host else {}},
             "roles_custom": self.roles_custom,
             "limits": {"min": MIN_PLAYERS, "max": MAX_PLAYERS, "creator_extra": CREATOR_EXTRA},
             # người chơi chỉ thấy: ai chết, ai bị treo, ai bị câm… (không thấy lời bàn / số người bấm Vote ngay)
@@ -1233,7 +1485,14 @@ class Room:
             "speech": self.speech[-150:] if (me.narrator or (me.is_host and self.settings.host_voice)) else [],
             "script_defaults": SCRIPT_DEFAULTS if me.is_host else None,
             "history": self.history if ended else [],
+            "scores": self.leaderboard(),
+            "games_played": self.games_played,
+            "last_result": self.last_result if ended else [],
             "winner": self.winner,
+            "role_defs": {k: {x: d[x] for x in ("name", "icon", "desc", "team")}
+                          for k, d in self.settings.custom_roles.items()},
+            "custom_step": ({x: self._cdef(self.custom_key)[x] for x in ("name", "icon")}
+                            if self.phase == Phase.NIGHT_CUSTOM and self.custom_key else None),
         }
 
     def _action_for(self, me: Player) -> dict | None:
@@ -1252,7 +1511,7 @@ class Room:
                     "info": "Sói Băng đã phong ấn bạn. Đêm nay bạn không dùng được năng lực."}
         if ph == Phase.NIGHT_CREATOR:
             return {"kind": "creator", "act": "creator_pick",
-                    "options": [r.value for r in self.creator_options]}
+                    "options": [rv(r) for r in self.creator_options]}
         if ph == Phase.NIGHT_CLONER:
             return {"kind": "cloner", "act": "clone", "pick": 1, "targets": others}
         if ph == Phase.NIGHT_GUARD:
@@ -1283,6 +1542,21 @@ class Room:
                     "targets": [p.id for p in self.alive() if not self.is_wolf(p)]}
         if ph == Phase.NIGHT_SPELL:
             return {"kind": "spell", "act": "silence", "pick": 1, "targets": others}
+        if ph == Phase.NIGHT_CUSTOM:
+            d = self._cdef(self.custom_key)
+            act = d["action"]
+            if act == "protect":
+                targets = [x for x in alive if not (d["no_repeat"] and self.custom_last.get(me.id) == x)]
+            elif act == "kill" and d["team"] == "wolves":
+                targets = [p.id for p in self.alive() if not self.is_wolf(p)]
+            else:
+                targets = [x for x in others if not (d["no_repeat"] and self.custom_last.get(me.id) == x)]
+            left = (f" Còn {d['uses'] - self.custom_used.get(me.id, 0)} lần dùng." if d["uses"] else "")
+            return {"kind": "custom", "act": "custom_act", "pick": 1, "action": act,
+                    "title": f"{d['icon']} {d['name']}", "verb": CUSTOM_ACTIONS[act][0],
+                    "desc": (d["desc"] or CUSTOM_ACTIONS[act][1].capitalize() + ".") + left,
+                    "danger": act == "kill", "targets": targets,
+                    "result": self.custom_results.get(me.id) or None, "ack": "custom_ack"}
         if ph == Phase.DAY_VOTE:
             return {"kind": "vote", "act": "vote", "pick": 1,
                     "chosen": self.day_votes.get(me.id), "targets": others}
