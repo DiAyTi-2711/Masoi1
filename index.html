@@ -322,6 +322,12 @@ select{width:100%;min-height:50px;border-radius:12px;border:1px solid var(--line
 #radial .ri.hot{transform:scale(1.18);background:var(--lantern);color:#24170a;border-color:var(--lantern)}
 .lobby-host{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
 .lobby-host input,.lobby-host textarea{-webkit-user-select:text;user-select:text}
+.pause-ov{position:fixed;inset:0;z-index:25;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;
+  padding:24px;text-align:center;background:rgba(5,6,12,.82);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
+.pause-ov .big{font-size:72px;line-height:1}
+.pause-ov h2{font:700 30px/1.2 var(--serif)}
+.pause-ov p{color:var(--mist);max-width:30ch}
+.pause-ov .btn{max-width:320px}
 .toast{position:fixed;left:16px;right:16px;top:calc(12px + env(safe-area-inset-top,0));max-width:488px;margin:0 auto;
   padding:14px 16px;border-radius:14px;background:#3a1b1f;color:#f6d0d3;z-index:20;display:none}
 .toast.show{display:block}
@@ -362,7 +368,7 @@ const GROUPS = [
 ];
 const WOLF_CARDS = ['werewolf','mutant_wolf','wolf_cub','snow_wolf'];
 const PHASE = {
-  lobby:'Phòng chờ', nightfall:'Màn đêm buông xuống', night_creator:'Kẻ Sáng Tạo thức dậy', night_cloner:'Kẻ Nhân Bản thức dậy',
+  lobby:'Phòng chờ', reveal:'Xem lá bài', nightfall:'Màn đêm buông xuống', night_creator:'Kẻ Sáng Tạo thức dậy', night_cloner:'Kẻ Nhân Bản thức dậy',
   night_moon:'Nguyệt Nữ thức dậy', night_snow:'Sói Băng thức dậy', night_guard:'Bảo Vệ thức dậy',
   night_wolves:'Bầy sói thức dậy', night_seer:'Tiên Tri thức dậy', night_witch:'Phù Thủy thức dậy',
   night_spell:'Kẻ Phù Phép thức dậy', dawn:'Bình minh', day_discuss:'Thảo luận',
@@ -468,7 +474,7 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden && S 
 
 /* ---------------- lời quản trò có thể chỉnh ---------------- */
 const SCRIPT_GROUPS = [
-  ['Màn đêm', [['nightfall', 'Bắt đầu mỗi đêm', ['dem']], ['sleep', 'Cho vai đi ngủ (dùng chung mọi vai)', ['vai']]]],
+  ['Màn đêm', [['look_cards', 'Đầu ván: mời xem lá bài', ['giay']], ['nightfall', 'Bắt đầu mỗi đêm', ['dem']], ['sleep', 'Cho vai đi ngủ (dùng chung mọi vai)', ['vai']]]],
   ['Gọi vai thức dậy', [['call_creator', 'Kẻ Sáng Tạo'], ['call_cloner', 'Kẻ Nhân Bản'], ['call_bodyguard', 'Bảo Vệ'],
     ['call_werewolf', 'Ma Sói'], ['call_witch', 'Phù Thủy'], ['call_seer', 'Tiên Tri'], ['call_moon_maiden', 'Nguyệt Nữ'],
     ['call_snow_wolf', 'Sói Băng'], ['call_spellcaster', 'Kẻ Phù Phép']]],
@@ -479,13 +485,12 @@ const SCRIPT_GROUPS = [
     ['host_skip', 'Quản trò cho bỏ phiếu ngay'], ['vote', 'Bắt đầu bỏ phiếu'],
     ['lynch', 'Có người bị treo cổ', ['ten', 'so_phieu']], ['no_lynch', 'Không ai bị treo cổ'],
     ['vote_detail', 'Công khai phiếu (khi bật hiển thị ai vote ai)', ['ten', 'so_phieu', 'nguoi_bo_phieu']]]],
-  ['Kết thúc', [['end', 'Công bố phe thắng', ['phe_thang']], ['ranking', 'Đọc bảng xếp hạng (3 người đầu)', ['so_van', 'xep_hang']],
-    ['thanks', 'Lời chào cuối'], ['cancel', 'Huỷ ván']]],
+  ['Kết thúc', [['end', 'Công bố phe thắng', ['phe_thang']], ['thanks', 'Lời chào cuối'], ['cancel', 'Huỷ ván'], ['pause', 'Tạm dừng ván'], ['resume', 'Tiếp tục ván']]],
 ];
-const PH_LABEL = {dem:'số đêm', vai:'tên vai', nguoi_chet:'tên người chết', ten:'tên người', so_phieu:'số phiếu',
+const PH_LABEL = {giay:'số giây', dem:'số đêm', vai:'tên vai', nguoi_chet:'tên người chết', ten:'tên người', so_phieu:'số phiếu',
   thoi_gian:'thời gian', phe_thang:'phe thắng', nguoi_bo_phieu:'người bỏ phiếu',
   so_van:'số ván', xep_hang:'danh sách xếp hạng'};
-const SAMPLE = {dem:1, vai:'Bảo Vệ', nguoi_chet:'An và Bình', ten:'An', so_phieu:5, thoi_gian:'3 phút', phe_thang:'Phe Dân Làng', nguoi_bo_phieu:'Bình, Chi và Dũng', so_van:3,
+const SAMPLE = {giay:5, dem:1, vai:'Bảo Vệ', nguoi_chet:'An và Bình', ten:'An', so_phieu:5, thoi_gian:'3 phút', phe_thang:'Phe Dân Làng', nguoi_bo_phieu:'Bình, Chi và Dũng', so_van:3,
   xep_hang:'hạng 1 là An với 3 điểm, hạng 2 là Bình với 2 điểm, hạng 3 là Chi với 1 điểm'};
 let editorOpen = false, pendingRender = false, scriptsSynced = false, saveTimer = null;
 const fillSample = t => t.replace(/\{(\w+)\}/g, (m, k) => k in SAMPLE ? SAMPLE[k] : m);
@@ -577,6 +582,13 @@ function render(){
   else if (S.phase === 'ended') renderEnd();
   else if (S.me.narrator) renderNarrator();
   else renderGame();
+  if (S.paused && S.phase !== 'lobby' && S.phase !== 'ended'){
+    app.insertAdjacentHTML('beforeend', `<div class="pause-ov" role="dialog" aria-live="polite"><div class="big">⏸️</div>
+      <h2>Ván đang tạm dừng</h2>
+      <p>${S.me.is_host ? 'Đồng hồ và máy chơi đã dừng. Bấm tiếp tục khi mọi người sẵn sàng.' : 'Quản trò đã tạm dừng. Đồng hồ đang đứng yên, chờ quản trò cho chơi tiếp.'}</p>
+      ${S.paused_left != null ? `<p>Lượt hiện tại còn ${Math.ceil(S.paused_left)} giây</p>` : ''}
+      ${S.me.is_host ? '<button class="btn primary" data-do="pause">▶ Tiếp tục ván</button><button class="btn" data-do="cancel_game">⛔ Huỷ ván</button>' : ''}</div>`);
+  }
   tick();
 }
 
@@ -681,7 +693,7 @@ function saveCustomRole(){
 
 /* ---------------- nhớ cấu hình phòng cho lần sau ---------------- */
 let configSynced = null;
-const CONFIG_KEYS = ['creator_seconds', 'wolves_seconds', 'role_seconds', 'hunter_seconds', 'discuss_seconds',
+const CONFIG_KEYS = ['reveal_seconds', 'creator_seconds', 'wolves_seconds', 'role_seconds', 'hunter_seconds', 'discuss_seconds',
   'vote_seconds', 'reveal_role_on_death', 'fast_turns', 'show_votes', 'host_voice'];
 function syncHostConfig(){
   if (!S.me.is_host || S.phase !== 'lobby') return;
@@ -743,6 +755,7 @@ function renderPlayerLobby(){
 
 let hostTab = load('masoi_host_tab') || 'people';
 const TIMERS = [
+  ['reveal_seconds', '🃏', 'Xem lá bài đầu ván', [5, 10, 15, 20, 30]],
   ['creator_seconds', '✨', 'Kẻ Sáng Tạo chọn lá', [20, 30, 45, 60]],
   ['wolves_seconds', '🐺', 'Ma Sói chọn mồi', [15, 20, 30, 45, 60]],
   ['role_seconds', '🌙', 'Các vai khác mỗi lượt', [5, 10, 15, 20, 30]],
@@ -971,7 +984,7 @@ document.addEventListener('touchmove', e => { if (radial) e.preventDefault(); },
 document.addEventListener('contextmenu', e => { if (hold || radial) e.preventDefault(); });
 
 function renderGame(){
-  const ph = S.phase, night = ph.startsWith('night') || ph === 'setup_creator';
+  const ph = S.phase, night = ph.startsWith('night') || ph === 'setup_creator' || ph === 'reveal';
   document.body.className = night ? 'night' : 'day';
   const a = S.action;
   const timerLabel = S.deadline ? `<span class="timer js-timer"></span>` : '';
@@ -986,13 +999,16 @@ function renderGame(){
       ${S.private.slice(1).reverse().map(t => `<p>${esc(t)}</p>`).join('') || '<p class="muted">Chưa có.</p>'}
       <p class="muted" style="font-size:13px;margin-top:14px">Trong làng: ai chết, ai bị treo cổ, ai bị câm</p>
       ${S.log.slice().reverse().map(l => `<p>${esc(l.text)}</p>`).join('') || '<p class="muted">Chưa có.</p>'}</details>
-    ${S.me.is_host ? `<div style="margin-top:18px">${voteToggle()}<button class="btn" data-do="cancel_game" style="margin-top:10px">⛔ Huỷ ván (chủ phòng)</button></div>` : ''}
+    ${S.me.is_host ? `<div style="margin-top:18px">${voteToggle()}<button class="btn" data-do="pause" style="margin-top:10px">${S.paused ? '▶ Tiếp tục' : '⏸ Tạm dừng ván'}</button><button class="btn" data-do="cancel_game" style="margin-top:10px">⛔ Huỷ ván (chủ phòng)</button></div>` : ''}
     <button class="role-btn" id="roleBtn">Giữ để xem vai của bạn</button>
     ${renderReveal()}`;
 }
 
 function renderPassive(){
   const ph = S.phase, last = S.log.length ? S.log[S.log.length - 1].text : '';
+  if (ph === 'reveal') return `
+    <div class="stage"><div class="big">🃏</div><h2>Đã nhớ vai</h2>
+      <p>Úp điện thoại xuống và chờ mọi người xem xong. Màn đêm sắp buông xuống.</p></div>`;
   if (ph === 'setup_creator') return `
     <div class="stage"><div class="big">🃏</div><h2>Đang chia bài</h2><p>Kẻ Sáng Tạo đang chọn vai. Chờ một chút nhé.</p></div>`;
   if (ph.startsWith('night')) return `
@@ -1063,13 +1079,23 @@ function confirmBar(a, K){
   document.body.classList.add('has-confirm');
   const names = esc(picks.map(id => P(id).name).join(' và '));
   if (a.kind === 'moon') return `<div class="confirm"><div class="row">
-    <button class="btn" data-do="confirm" data-act="moon_check">🔍 Soi vai</button>
+    ${picks[0] === S.me.id ? '' : '<button class="btn" data-do="confirm" data-act="moon_check">🔍 Soi vai</button>'}
     <button class="btn primary" data-do="confirm" data-act="moon_shield">🛡️ Che chắn</button></div></div>`;
   return `<div class="confirm"><button class="btn ${K.danger ? 'danger' : 'primary'}" data-do="confirm">${K.btn} ${names}</button></div>`;
 }
 
 function renderAction(a){
   const K = KIND[a.kind] || {t: a.title, d: a.desc, btn: a.verb, rt: a.title, danger: a.danger};
+  if (a.kind === 'look'){
+    const R = RI(S.me.role) || {}, [team, cls] = teamOf();
+    return `<div class="panel" style="text-align:center;padding-top:3vh">
+      <p class="muted">Đây là lá bài của bạn. Đừng để ai nhìn thấy.</p>
+      <div style="font-size:88px;line-height:1;margin:18px 0 8px">${R.icon || '❔'}</div>
+      <h2 style="font-size:36px">${esc(R.name || '')}</h2>
+      <div class="${cls}" style="margin:6px 0 12px;font-weight:600">${team}</div>
+      <p class="muted" style="max-width:32ch;margin:0 auto 20px">${esc(R.desc || '')}</p>
+      <button class="btn primary" data-ack="seen_role">✓ Đã nhớ, nhắm mắt</button></div>`;
+  }
   if (a.info) return `<div class="panel"><h2>${K.t}</h2><div class="result">${esc(a.info)}</div>
     <button class="btn primary" data-ack="${a.ack}">Đã hiểu, nhắm mắt</button></div>`;
   if (a.result) return `<div class="panel"><h2>${K.rt}</h2><div class="result">${esc(a.result)}</div>
@@ -1204,9 +1230,9 @@ function recapHtml(){
 
 /* ---------------- máy quản trò ---------------- */
 function renderNarrator(){
-  const ph = S.phase, night = ph.startsWith('night');
+  const ph = S.phase, night = ph.startsWith('night') || ph === 'reveal';
   document.body.className = night ? 'night' : 'day';
-  const icon = night ? '🌙' : ph === 'hunter_shot' ? '🏹' : ph === 'day_vote' || ph === 'verdict' ? '⚖️' : '☀️';
+  const icon = ph === 'reveal' ? '🃏' : night ? '🌙' : ph === 'hunter_shot' ? '🏹' : ph === 'day_vote' || ph === 'verdict' ? '⚖️' : '☀️';
   const alive = S.players.filter(p => p.alive).length;
   app.innerHTML = `
     <div class="narr-stage"><div class="big">${icon}</div><h2>${phaseLabel(ph)}</h2>
@@ -1214,6 +1240,7 @@ function renderNarrator(){
       <div class="narr-timer js-timer"></div></div>
     <div class="subtitle" id="subtitle">${esc(currentLine || '…')}</div>
     <div class="narr-tools">
+      <button class="btn" data-do="pause" style="grid-column:1/-1">${S.paused ? '▶ Tiếp tục' : '⏸ Tạm dừng ván'}</button>
       <button class="btn" data-do="repeat">🔁 Nhắc lại</button>
       <button class="btn" data-do="mute">${muted ? '🔈 Bật tiếng' : '🔇 Tắt tiếng'}</button></div>
     ${ph === 'day_discuss' ? chatter() : ''}
@@ -1261,9 +1288,25 @@ function audioPanel(){
 }
 
 /* ---------------- đồng hồ ---------------- */
+let autoKey = '';
 function tick(){
   if (!S || !S.deadline) return;
-  const s = Math.max(0, Math.ceil((S.deadline * 1000 - (Date.now() + clockOffset)) / 1000));
+  if (S.paused){   // đồng hồ đứng yên khi tạm dừng
+    const p = Math.ceil(S.paused_left || 0);
+    document.querySelectorAll('.js-timer').forEach(el => { el.textContent = `⏸ ${Math.floor(p / 60)}:${String(p % 60).padStart(2, '0')}`; });
+    return;
+  }
+  const left = (S.deadline * 1000 - (Date.now() + clockOffset)) / 1000;
+  const s = Math.max(0, Math.ceil(left));
+  const A = S.action, key = `${S.phase}-${S.day}-${A?.kind}`;
+  // Đã chạm chọn người nhưng chưa kịp bấm xác nhận: tự gửi khi còn ~1 giây
+  const autoAct = A && A.kind !== 'witch' ? (A.act || (A.kind === 'moon' ? 'moon_shield' : null)) : null;  // không tự dùng bình độc
+  if (autoAct && picks.length && picks.length === (A.pick || 1) && left <= 1.2 && autoKey !== key){
+    autoKey = key;
+    act(autoAct, A.pick > 1 ? picks : picks[0]);
+    picks = []; toast('⏱️ Hết giờ – đã tự gửi lựa chọn của bạn');
+  }
+  if (A && A.targets?.length && !picks.length && s === 3 && autoKey !== key + '3'){ autoKey = key + '3'; navigator.vibrate?.(150); }
   document.querySelectorAll('.js-timer').forEach(el => {
     el.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
     el.classList.toggle('urgent', s <= 10);
@@ -1359,7 +1402,7 @@ app.addEventListener('click', async e => {
         stopSpeech();
         const lines = ['Diễn biến ván chơi.'];
         let period = null;
-        for (const h of S.history){ if (h.period !== period){ period = h.period; lines.push(period + '.'); } lines.push(h.text); }
+        for (const h of S.history){ if (h.period === 'Chia bài') continue; if (h.period !== period){ period = h.period; lines.push(period + '.'); } lines.push(h.text); }
         speakQueue.push(...lines); pump(); return;
       }
       case 'join': {
@@ -1422,6 +1465,7 @@ app.addEventListener('click', async e => {
         send({type:'settings', settings:{auto_roles:true, creator_seconds:30, wolves_seconds:20, role_seconds:5,
           hunter_seconds:15, discuss_seconds:180, vote_seconds:60, reveal_role_on_death:true, fast_turns:true, show_votes:false}});
         toast('Đã trả về cấu hình mặc định'); return;
+      case 'pause': send({type:'pause'}); return;
       case 'show_votes': send({type:'settings', settings:{show_votes: !S.settings.show_votes}}); return;
       case 'cancel_game':
         if (confirm('Huỷ ván đang chơi? Mọi người sẽ quay lại phòng chờ.')) send({type:'cancel_game'});

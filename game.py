@@ -69,6 +69,7 @@ CREATOR_EXTRA = 2  # số lá dư khi có Kẻ Sáng Tạo
 
 class Phase(str, Enum):
     LOBBY = "lobby"
+    REVEAL = "reveal"              # đầu ván: mọi người xem lá bài của mình
     NIGHTFALL = "nightfall"
     NIGHT_CREATOR = "night_creator"
     NIGHT_CLONER = "night_cloner"
@@ -164,8 +165,11 @@ SCRIPT_DEFAULTS: dict[str, str] = {
     "no_lynch": "Số phiếu không đủ. Hôm nay không ai bị treo cổ.",
     "end": "Ván chơi kết thúc. {phe_thang} chiến thắng! Sau đây là diễn biến của ván chơi.",
     "thanks": "Cảm ơn mọi người đã chơi.",
+    "look_cards": "Ván chơi bắt đầu. Mọi người hãy xem lá bài của mình. Các bạn có {giay} giây.",
     "vote_detail": "{ten} có {so_phieu} phiếu từ {nguoi_bo_phieu}.",
     "cancel": "Quản trò đã huỷ ván chơi. Mọi người quay lại phòng chờ.",
+    "pause": "Quản trò tạm dừng ván chơi. Mọi người nghỉ một chút nhé.",
+    "resume": "Ván chơi tiếp tục.",
     "ranking": "Bảng xếp hạng sau {so_van} ván: {xep_hang}.",
 }
 SCRIPT_MAX = 300
@@ -220,6 +224,7 @@ class Player:
 @dataclass
 class Settings:
     roles: dict[str, int] = field(default_factory=dict)
+    reveal_seconds: int = 5      # thời gian xem lá bài trước khi đi ngủ
     creator_seconds: int = 30
     wolves_seconds: int = 20
     role_seconds: int = 5        # mọi vai còn lại
@@ -290,6 +295,8 @@ class Room:
         self.silenced: str | None = None
         self.ready_vote: set[str] = set()
         self.next_ready: set[str] = set()
+        self.paused_at: float | None = None
+        self._paused_total = 0.0
         self.last_result: list[dict] = []
         self._day_log_start = 0  # ai đã bấm "Sẵn sàng chơi tiếp" khi hết ván
         self._step_id = 0
@@ -435,7 +442,7 @@ class Room:
                 self.settings.roles = roles
                 self.roles_custom = True
             self._auto_roles()
-            limits = {"creator_seconds": (10, 90), "wolves_seconds": (10, 90),
+            limits = {"reveal_seconds": (3, 60), "creator_seconds": (10, 90), "wolves_seconds": (10, 90),
                       "role_seconds": (5, 60), "hunter_seconds": (5, 60),
                       "discuss_seconds": (30, 900), "vote_seconds": (15, 300)}
             for key, (lo, hi) in limits.items():
@@ -657,6 +664,11 @@ class Room:
     # ------------------------------------------------------------ vòng lặp ván
     async def _run(self) -> None:
         try:
+            # Xem lá bài: ai bấm "Đã nhớ" hết thì đi ngủ sớm (nếu bật chọn xong là sang lượt)
+            secs = self.settings.reveal_seconds
+            self._say(self._t("look_cards", giay=secs))
+            await self._step(Phase.REVEAL, secs, {p.id for p in self.seated()},
+                             early=self.settings.fast_turns, min_seconds=min(secs, 3))
             while True:
                 self.day_no += 1
                 await self._night()
@@ -710,17 +722,48 @@ class Room:
         self.deadline = start + seconds
         await self._broadcast(self)
         self._wake_bots(seconds)
-        try:
-            if early:
-                await asyncio.wait_for(self._step_done.wait(), timeout=seconds)
-            else:
-                await asyncio.sleep(seconds if wait is None else wait)
-        except asyncio.TimeoutError:
-            pass
-        rest = start + min_seconds - time.time()
+        t0 = self._active_time()
+        await self._wait(seconds if early else (seconds if wait is None else wait),
+                         self._step_done if early else None)
+        rest = min_seconds - (self._active_time() - t0)
         if rest > 0:
-            await asyncio.sleep(rest)
+            await self._wait(rest)
         self.actors = set()
+
+    # ------------------------------------------------------------ tạm dừng
+    def _active_time(self) -> float:
+        """Đồng hồ không chạy khi đang tạm dừng."""
+        return time.time() - self._paused_total - ((time.time() - self.paused_at) if self.paused_at else 0)
+
+    async def _wait(self, seconds: float, event: asyncio.Event | None = None) -> None:
+        """Chờ `seconds` giây tính theo thời gian chơi thật (bỏ qua lúc tạm dừng)."""
+        end = self._active_time() + seconds
+        while True:
+            left = end - self._active_time()
+            if left <= 0 or (event is not None and event.is_set() and not self.paused_at):
+                return
+            await asyncio.sleep(min(.2, left) if not self.paused_at else .2)
+
+    async def _until_resumed(self) -> None:
+        while self.paused_at:
+            await asyncio.sleep(.3)
+
+    def toggle_pause(self) -> bool:
+        if self.phase in (Phase.LOBBY, Phase.ENDED):
+            raise GameError("Không có ván nào đang chơi")
+        if self.paused_at:
+            gap = time.time() - self.paused_at
+            self._paused_total += gap
+            if self.deadline:
+                self.deadline += gap          # đồng hồ chạy tiếp từ chỗ dừng
+            self.paused_at = None
+            self._event("▶️ Ván chơi tiếp tục.")
+            self._say(self._t("resume"))
+        else:
+            self.paused_at = time.time()
+            self._event("⏸️ Quản trò tạm dừng ván.")
+            self._say(self._t("pause"))
+        return bool(self.paused_at)
 
     async def _call(self, phase: Phase, seconds: float, actors: set[str]) -> None:
         """Quản trò gọi một vai dậy, chờ, rồi cho vai đó đi ngủ."""
@@ -765,7 +808,7 @@ class Room:
     async def _announce(self, phase: Phase, seconds: float | None = None) -> None:
         self.phase, self.deadline, self.actors = phase, None, set()
         await self._broadcast(self)
-        await asyncio.sleep(self.announce_seconds if seconds is None else seconds)
+        await self._wait(self.announce_seconds if seconds is None else seconds)
 
     async def _night(self) -> None:
         self._reset_night()
@@ -1021,12 +1064,11 @@ class Room:
         self._event(("🏆 " if self.winner == "village" else "🐺 ") + f"{won} chiến thắng!")
         self._say(self._t("end", phe_thang=won))
         self._score_game()
-        top = self.leaderboard()[:3]
-        if top:
-            self._say(self._t("ranking", so_van=self.games_played, xep_hang=", ".join(
-                f"hạng {r['rank']} là {r['name']} với {r['points']} điểm" for r in top)))
+        # Chỉ đọc diễn biến các đêm/ngày. Chia bài và bảng xếp hạng để mọi người tự xem trên điện thoại.
         period = None
         for h in self.history:
+            if h["period"] == "Chia bài":
+                continue
             if h["period"] != period:
                 period = h["period"]
                 self._say(period + ".")
@@ -1093,6 +1135,8 @@ class Room:
             raise GameError("Người chơi không tồn tại")
         ph = self.phase
 
+        if self.paused_at:
+            raise GameError("Ván đang tạm dừng – chờ quản trò cho chơi tiếp")
         if action == "skip_discussion":
             if not p.is_host or ph != Phase.DAY_DISCUSS:
                 raise GameError("Chỉ chủ phòng mới bỏ qua được thảo luận")
@@ -1111,7 +1155,13 @@ class Room:
             await self._broadcast(self)
             return
         if pid not in self.actors:
-            raise GameError("Hết lượt của bạn rồi" if ph.value.startswith("night") else "Chưa đến lượt của bạn")
+            raise GameError("Đã hết giờ chọn của lượt này" if ph.value.startswith("night") else "Chưa đến lượt của bạn")
+        if ph == Phase.REVEAL:
+            if action != "seen_role":
+                raise GameError("Hãy xem lá bài của bạn")
+            self._done(pid)
+            await self._broadcast(self)
+            return
         if ph in FREEZABLE and pid == self.frozen:
             if action != "frozen_ack":
                 raise GameError("Bạn đang bị Sói Băng phong ấn")
@@ -1147,8 +1197,9 @@ class Room:
             self._done(pid)
         elif ph == Phase.NIGHT_WOLVES and action == "wolf_vote":
             picks = target if isinstance(target, list) else [target]
-            if len(set(map(str, picks))) != self.bites:
-                raise GameError(f"Đêm nay bầy được cắn {self.bites} người")
+            need = min(self.bites, len([x for x in self.alive() if not self.is_wolf(x)]))
+            if len(set(map(str, picks))) != need:
+                raise GameError(f"Đêm nay bầy được cắn {need} người")
             for t in picks:
                 self._need_alive(t)
                 if self.is_wolf(self.players[t]):
@@ -1307,7 +1358,8 @@ class Room:
             asyncio.create_task(self._bot_turn(pid, self._step_id, delay))
 
     async def _bot_turn(self, pid: str, step_id: int, delay: float) -> None:
-        await asyncio.sleep(delay)
+        await self._wait(delay)
+        await self._until_resumed()
         for _ in range(4):  # vài thao tác liên tiếp: soi rồi bấm "đã ghi nhớ", cứu rồi "xong"…
             if self._step_id != step_id or pid not in self.actors:
                 return
@@ -1393,7 +1445,8 @@ class Room:
 
     async def _bot_chat(self, pid: str, step_id: int, delay: float) -> None:
         """Máy chơi lên tiếng trong buổi thảo luận (quản trò đọc to)."""
-        await asyncio.sleep(delay)
+        await self._wait(delay)
+        await self._until_resumed()
         p = self.players[pid]
         if self._step_id != step_id or self.phase != Phase.DAY_DISCUSS or not p.alive:
             return
@@ -1489,6 +1542,8 @@ class Room:
             "games_played": self.games_played,
             "last_result": self.last_result if ended else [],
             "winner": self.winner,
+            "paused": bool(self.paused_at),
+            "paused_left": (max(0, self.deadline - self.paused_at) if (self.paused_at and self.deadline) else None),
             "role_defs": {k: {x: d[x] for x in ("name", "icon", "desc", "team")}
                           for k, d in self.settings.custom_roles.items()},
             "custom_step": ({x: self._cdef(self.custom_key)[x] for x in ("name", "icon")}
@@ -1509,6 +1564,8 @@ class Room:
         if ph in FREEZABLE and me.id == self.frozen:
             return {"kind": "frozen", "ack": "frozen_ack",
                     "info": "Sói Băng đã phong ấn bạn. Đêm nay bạn không dùng được năng lực."}
+        if ph == Phase.REVEAL:
+            return {"kind": "look", "ack": "seen_role", "info": "Xem lá bài của bạn"}
         if ph == Phase.NIGHT_CREATOR:
             return {"kind": "creator", "act": "creator_pick",
                     "options": [rv(r) for r in self.creator_options]}
@@ -1521,7 +1578,8 @@ class Room:
             if self.bites == 0:
                 return {"kind": "wolf_sick", "ack": "sick_ack",
                         "info": "Đêm qua bầy đã cắn phải Người Bệnh. Cả bầy nhiễm bệnh, đêm nay không cắn được ai."}
-            return {"kind": "wolf_vote", "act": "wolf_vote", "pick": self.bites,
+            prey = [p.id for p in self.alive() if not self.is_wolf(p)]
+            return {"kind": "wolf_vote", "act": "wolf_vote", "pick": max(1, min(self.bites, len(prey))),
                     "chosen": self.wolf_votes.get(me.id) or [],
                     "team_votes": self.wolf_votes,
                     "targets": [p.id for p in self.alive() if not self.is_wolf(p)]}

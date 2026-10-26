@@ -219,6 +219,8 @@ async def dispatch(room: Room, pid: str, ws: WebSocket, msg: dict) -> None:
         room.reset_to_lobby()
     elif kind == "reset_scores":
         room.reset_scores()
+    elif kind == "pause":
+        room.toggle_pause()
     elif kind == "cancel_game":
         room.cancel_game()
     elif kind == "new_game":
